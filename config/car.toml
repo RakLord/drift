@@ -1,0 +1,85 @@
+# Default car: a generic late-90s JDM drift build (S15-ish proportions).
+#
+# Units are SI (kg, m, s, N, Nm) unless the name says otherwise (deg, rpm, hz).
+# The viewer hot-reloads this file, so it can be tuned while driving.
+
+# Physics substeps per sim tick (the sim ticks at 120 Hz).
+substeps = 4
+
+[body]
+mass = 1250.0
+yaw_inertia = 2100.0
+wheelbase = 2.53
+cg_to_front_axle = 1.265      # half the wheelbase = 50/50 weight split
+track_width_front = 1.48
+track_width_rear = 1.48
+cg_height = 0.46
+length = 4.45
+width = 1.70
+
+[suspension]
+# Load transfer follows the ideal (steady-state) value through a damped
+# spring, so weight shifts take a moment, like real suspension.
+roll_frequency_hz = 2.0
+roll_damping_ratio = 0.7
+pitch_frequency_hz = 2.2
+pitch_damping_ratio = 0.7
+front_roll_share = 0.55       # fraction of roll load transfer taken by the front axle
+
+[steering]
+max_lock_deg = 60.0           # angle kit
+rate_deg_per_s = 360.0        # how fast the road wheels can turn
+
+[wheel]
+radius = 0.32
+inertia = 1.2                 # per wheel, kg m^2
+
+[tyre]
+mu_peak = 1.1                 # peak friction coefficient at reference load
+slide_ratio = 0.8             # fully sliding grip as a fraction of peak
+peak_slip_long = 0.12         # slip ratio at peak longitudinal grip
+peak_slip_lat = 0.14          # slip (~tan of slip angle) at peak lateral grip, ~8 deg
+falloff = 1.5                 # how quickly grip drops past the peak (bigger = gentler)
+load_sensitivity = 0.1        # grip coefficient lost per unit of extra load ratio
+reference_load = 3065.0       # static load per wheel, N
+min_speed = 1.0               # slip denominator floor, m/s; keeps low speed stable
+rolling_resistance = 0.015
+
+[engine]
+inertia = 0.2                 # crank + flywheel, kg m^2
+idle_rpm = 900.0
+idle_governor_band_rpm = 300.0
+rev_limit_rpm = 7800.0
+limiter_hysteresis_rpm = 150.0
+friction_base = 15.0          # Nm, engine braking at 0 rpm
+friction_per_krpm = 5.0       # extra Nm of engine braking per 1000 rpm
+# Full-throttle torque curve: [rpm, Nm]. Peak ~340 hp around 6000 rpm.
+torque_curve = [
+    [1000.0, 200.0],
+    [2000.0, 280.0],
+    [3000.0, 340.0],
+    [4000.0, 390.0],
+    [5000.0, 410.0],
+    [6000.0, 400.0],
+    [7000.0, 370.0],
+    [7800.0, 330.0],
+]
+
+[clutch]
+max_torque = 700.0
+# Anti-stall: clutch capacity fades out as the engine drops from bite_rpm to
+# stall_rpm, so the car can pull away and lock the rears without stalling.
+stall_rpm = 1100.0
+bite_rpm = 2200.0
+
+[drivetrain]
+ratio = 6.2                   # single fixed gear x final drive (~3rd gear feel)
+inertia = 0.6                 # shafts + welded diff, at the axle
+
+[brakes]
+front_torque = 2200.0         # per wheel at full pedal
+rear_torque = 1200.0          # per wheel at full pedal
+handbrake_torque = 4000.0     # whole rear axle at full pull
+
+[aero]
+drag = 0.40                   # 0.5 * air density * Cd * frontal area

@@ -96,6 +96,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sim"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "syn"
 version = "3.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
