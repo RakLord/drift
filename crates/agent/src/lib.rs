@@ -2,6 +2,7 @@
 
 pub mod driver;
 pub mod genome_file;
+pub mod replay_file;
 
 pub use driver::{NnDriver, driver_spec};
 pub use genome_file::{GenomeHeader, SavedGenome};

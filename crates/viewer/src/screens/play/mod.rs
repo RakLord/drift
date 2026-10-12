@@ -1,5 +1,6 @@
 //! Free-drive screen: one car on a track, driven by you.
 
+mod ai_recorder;
 mod configs;
 mod generator_panel;
 mod library;
@@ -25,6 +26,7 @@ use crate::input::{Input, ai::AiDriver, autopilot::Autopilot};
 use crate::paths::workspace_file;
 use crate::render::score::ScoreHud;
 use crate::render::{self, camera::FollowCamera, effects::Effects, ground, hud, text, theme, track::TrackMesh};
+use ai_recorder::AiRecorder;
 use configs::{Configs, Reload};
 use generator_panel::{GeneratorPanel, PanelAction};
 use library_panel::{LibraryAction, LibraryPanel};
@@ -73,6 +75,8 @@ pub struct PlayScreen {
     autopilot: Option<Autopilot>,
     /// A trained genome driving (`--genome`).
     ai: Option<AiDriver>,
+    /// Records AI runs so `X` can save the last as a replay.
+    ai_recorder: AiRecorder,
     show_inputs: bool,
     dashboard: crate::dashboard::Dashboard,
     net_view: NetView,
@@ -151,6 +155,7 @@ impl PlayScreen {
             input: Input::new(),
             autopilot: (options.autopilot || options.donut).then(|| Autopilot::new(options.donut)),
             ai,
+            ai_recorder: AiRecorder::new(),
             show_inputs: false,
             dashboard: crate::dashboard::Dashboard::new(
                 options.genome.as_ref().and_then(|g| g.parent()).map(|run| run.join("metrics.csv")),
@@ -237,12 +242,15 @@ impl PlayScreen {
                 _ => input,
             };
             self.feed_network_view();
+            self.ai_recorder.before_tick(self.ai.as_ref());
             self.previous = Pose::of(&self.world.car.state);
             self.world.step(controls, TICK);
             let car = &self.world.car;
             self.effects.on_tick(&car.state, &car.params, self.world.contacts(), TICK);
             let events = self.scorer.update(&self.world, self.world.contacts(), TICK);
             self.score_hud.on_events(events);
+            self.ai_recorder.after_tick(&self.world, &self.scorer);
+            let events = self.scorer.events();
             self.history.record(&car.state);
             self.accumulator -= TICK;
             ticks += 1;
@@ -255,6 +263,9 @@ impl PlayScreen {
             }
         }
         if let Some(end) = run_over {
+            if let Some(ai) = &self.ai {
+                self.ai_recorder.finish(ai, &self.world, &self.scorer, end);
+            }
             let generation = self.ai.as_ref().and_then(AiDriver::generation).unwrap_or(0);
             let summary = format!(
                 "gen {generation}: {} after {:.0} m, score {:.0}",
@@ -422,6 +433,7 @@ impl PlayScreen {
         self.scorer = Scorer::new(self.scorer.params.clone(), &self.world.track);
         self.score_hud.clear();
         self.autopilot = self.autopilot.as_ref().map(Autopilot::restarted);
+        self.ai_recorder.start(self.ai.as_ref(), &self.world, &self.scorer);
     }
 
     /// Switch to the track for `source`, keeping the current one on failure.
@@ -514,6 +526,12 @@ impl PlayScreen {
         }
         if is_key_pressed(KeyCode::K) {
             self.keep_track();
+        }
+        if is_key_pressed(KeyCode::X) && self.ai.is_some() {
+            self.toast = Some(match self.ai_recorder.save(self.ai.as_ref()) {
+                Ok(path) => (format!("saved replay {}", path.display()), 4.0),
+                Err(err) => (err, 4.0),
+            });
         }
         if is_key_pressed(KeyCode::LeftBracket) {
             self.time_scale_index = self.time_scale_index.saturating_sub(1);
@@ -678,7 +696,7 @@ impl PlayScreen {
                 "pad: stick steer  RT throttle  LT brake  A/RB handbrake  X/LB clutch  Start reset",
                 "keys: WASD/arrows  Space handbrake  Shift clutch  R reset  P pause  [ ] speed  wheel zoom",
                 "N new track  F generator  L next library track  O library  K keep track  M map  E effects  T telemetry  G gamepad  C run charts  H help",
-                "Y / pad Select: restart a stalled engine   AI (--genome / --follow): Tab take over  I inputs  V network  B newest best",
+                "Y / pad Select: restart a stalled engine   AI (--genome / --follow): Tab take over  I inputs  V network  B newest best  X save last run",
             ]
         } else {
             &["H: help"]
@@ -697,7 +715,7 @@ fn file_name(path: &Path) -> String {
 }
 
 /// Bounding box of the track including verges.
-fn track_bounds(track: &Track) -> (Vec2, Vec2) {
+pub fn track_bounds(track: &Track) -> (Vec2, Vec2) {
     let pad = Vec2::new(1.0, 1.0) * (track.half_width() + track.def.verge + 10.0);
     let (lo, hi) = track.samples.iter().fold((Vec2::new(f64::MAX, f64::MAX), Vec2::new(f64::MIN, f64::MIN)), |(lo, hi), s| {
         let p = s.position;

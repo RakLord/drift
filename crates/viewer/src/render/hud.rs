@@ -8,7 +8,12 @@ use super::{text, theme};
 
 /// `view_w`: width of the track area on screen (the HUD stays inside it).
 pub fn draw(state: &CarState, params: &CarParams, view_w: f32) {
-    let h = screen_height();
+    draw_at(state, params, view_w, screen_height());
+}
+
+/// Laid out from `bottom` instead of the bottom of the screen.
+pub fn draw_at(state: &CarState, params: &CarParams, view_w: f32, bottom: f32) {
+    let h = bottom;
     let x = 24.0;
 
     let kmh = state.speed() * 3.6;

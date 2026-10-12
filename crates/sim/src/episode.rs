@@ -9,6 +9,7 @@ use crate::Controls;
 use crate::World;
 use crate::car::{CarParams, CarState};
 use crate::controller::Controller;
+use crate::recording::{Recorder, Recording};
 use crate::scoring::{Breakdown, ScoreEvent, ScoreEventKind, Scorer, ScoringParams};
 use crate::sensors::observation::{Observation, Observer};
 use crate::track::Track;
@@ -198,6 +199,8 @@ pub struct Episode {
     /// How long the clutch has been held in this press, seconds.
     clutch_held: f64,
     end: Option<EndReason>,
+    /// Recording for a replay, if asked for. Never changes the run.
+    recorder: Option<Recorder>,
 }
 
 impl Episode {
@@ -220,7 +223,18 @@ impl Episode {
             stats: EpisodeStats::default(),
             clutch_held: 0.0,
             end: None,
+            recorder: None,
         }
+    }
+
+    /// Record this run for a replay (call before the first step).
+    pub fn record(&mut self) {
+        self.recorder = Some(Recorder::new(&self.world, &self.scorer));
+    }
+
+    /// The recording so far, ending it.
+    pub fn take_recording(&mut self) -> Option<Recording> {
+        self.recorder.take().map(|r| r.finish(&self.world, &self.scorer))
     }
 
     pub fn ended(&self) -> Option<EndReason> {
@@ -241,6 +255,9 @@ impl Episode {
         let every = u64::from(self.config.decision_every.max(1));
         if self.tick % every == u64::from(self.offset) % every {
             let observation = self.observe();
+            if let Some(recorder) = &mut self.recorder {
+                recorder.on_decision(&observation);
+            }
             self.held = controller.decide(&observation);
         }
         self.advance(self.held)
@@ -251,6 +268,9 @@ impl Episode {
         self.world.step(controls, TICK);
         self.tick += 1;
         self.scorer.update(&self.world, self.world.contacts(), TICK);
+        if let Some(recorder) = &mut self.recorder {
+            recorder.on_tick(&self.world, &self.scorer);
+        }
         let events = self.scorer.events();
         let stats = &mut self.stats;
         stats.ticks = self.tick;
@@ -303,6 +323,9 @@ impl Episode {
         if self.end == Some(EndReason::TimeUp) {
             // A drift still going at the bell counts.
             self.scorer.finish();
+            if let Some(recorder) = &mut self.recorder {
+                recorder.on_events(self.scorer.events());
+            }
         }
         self.end
     }
@@ -312,6 +335,15 @@ impl Episode {
         controller.reset();
         while self.step(controller).is_none() {}
         self.result()
+    }
+
+    /// Drive until the run ends, recording it for a replay.
+    pub fn run_recorded(mut self, controller: &mut dyn Controller) -> (EpisodeResult, Recording) {
+        self.record();
+        controller.reset();
+        while self.step(controller).is_none() {}
+        let recording = self.take_recording().expect("recording");
+        (self.result(), recording)
     }
 
     pub fn result(&self) -> EpisodeResult {

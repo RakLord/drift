@@ -36,6 +36,8 @@ pub struct Report {
     /// this generation (1 = the fittest).
     pub saved_fitness: f64,
     pub saved_rank: usize,
+    /// Replays written this generation.
+    pub replays: usize,
     /// The saved driver's mean over all its runs.
     pub best_score: Breakdown,
     pub best_progress: f64,
@@ -150,6 +152,7 @@ impl Report {
             island_best: islands.iter().map(|i| i.best().map_or(0.0, |(_, f)| f)).collect(),
             saved_fitness: saved.fitness,
             saved_rank: saved.rank + 1,
+            replays: 0,
             best_score: mean_score(&best_runs),
             best_progress: mean(best_runs.iter().map(|r| r.progress)),
             best_laps: mean(best_runs.iter().map(|r| r.laps())),
@@ -207,10 +210,13 @@ impl Report {
             let k = EndReason::ALL.iter().position(|&e| e == reason).unwrap_or(0);
             format!("{:>2.0}", self.ends[k] * 100.0)
         };
-        let test = match (self.test_fitness, self.test_laps) {
+        let mut test = match (self.test_fitness, self.test_laps) {
             (Some(f), Some(l)) => format!("  test: fitness {f:.0}, {l:.2} laps"),
             _ => String::new(),
         };
+        if self.replays > 0 {
+            test += &format!("  [{} replays]", self.replays);
+        }
         format!(
             "{:>5} {:<6}│   {:>5.2} {:>5.0}° {:>6.0} {:>5.2} │ {:>7.0}   {:>5.2} {:>5.2} {:>4} │   {:>5.2} {:>4.0}% {:>5.0}° {:>5.1} {:>5.3} │ {} {} {} {} {} {} │ {:>3.0} {:>6.0} {:>4.0} {:>4.0} │ {:>4.1}{test}",
             self.generation,

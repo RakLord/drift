@@ -38,6 +38,10 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - Done: polish phase (`polish` on a stage) and a sturdier best.genome (`[best]`: top 5 re-run on 6 extra tracks).
 - Next: M3's features are in; what's left is user-led training to get cars drifting through drive -> slide -> judged (and, once judged works, polishing).
 
+**In progress: M4** (network view and run dashboard already done)
+- Done: replays (see *Replays*): the trainer records the saved best every `replays.every` gens; the viewer plays them back (`--replays <run>`), and `X` saves the last AI run.
+- Next: live multi-car viewer, then the human review grid, then visual polish.
+
 **Conventions**
 - The sim uses `f64` (SI units). The NN will use `f32`.
 - World axes: +x right, +y up, angles CCW. Car frame: +x forward, +y left. Positive steer = left.
@@ -57,6 +61,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `cargo run -p viewer -- --follow <run>`: watch a run live (picks up each new best between runs)
 - `--track tracks/<file>.toml` on any viewer command: drive/watch on that saved track instead of `test_loop`
 - `V` while an AI drives: network view (add `--net` to start with it open)
+- `cargo run -p viewer -- --replays <run>`: watch a run's replays (newest first, picker open); `--replay <file>` for one file; `X` while an AI drives saves its last run
 
 **Tuning notes**
 - It feels a little icy on keyboard. Retest on gamepad before tuning.
@@ -232,6 +237,18 @@ Outputs are produced once per decision and held until the next one.
 - **Polish phase:** an optional `polish` block on a curriculum stage: smaller σ (reset on entry, no reseed), no immigrants, more generated tracks per generation. Every genome, elites included, is already re-evaluated on fresh tracks each generation.
 - **Saved best (`[best]`):** the top few genomes by fitness also drive some extra generated tracks; the best over all its runs is saved as best.genome, judges curriculum advance and runs the test set, so a lucky draw can't replace a steadier driver.
 - **Monitoring:** see *Network view & metrics*.
+
+## Replays
+
+- **File (`.replay`, `agent::replay_file`):** magic + version, a TOML header, then binary data.
+  - Header: provenance (run, generation, island, stage, fitness, result), the track definition, car and scoring params (embedded, so a replay survives library edits and config changes), the frame field names, and the frame rate.
+  - Frames at 30 Hz (`sim::frame`): pose, velocity, yaw rate, steer, accel; per wheel spin, load, force, slip ratio/angle, combined slip, slip speed; rpm, clutch temp/lock, limiter, engine running; controls; progress; banked score and combo. Read by field name, so adding a field later still loads old files (missing = 0).
+  - Sparse records with their tick: wall contacts (sparks, damage), score events (popups), zones lighting up.
+  - The network's inputs at every decision, plus the genome, so the network view (`V`) replays exactly (off if the input layout has changed since).
+- **Recorded by:**
+  - the trainer: every `replays.every` generations (default 10), the saved best re-run on each of that generation's tracks (identical to its scored run), into `runs/<run>/replays/`
+  - the viewer: `X` saves the last AI run (AI runs only).
+- **Playback:** interpolated between frames; smoke, skids and sparks regenerate from the recorded wheel states and contacts. `--replay <file>` or `--replays <run>` (picker). Timeline with score-event ticks, click/drag to seek; Space play/pause, `,` `.` step, `[` `]` speed; the usual toggles. Seeking rebuilds the effects from the start.
 
 ## Human review
 

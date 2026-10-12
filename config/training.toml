@@ -71,6 +71,12 @@ every = 10                # full population saved every N generations
 candidates = 5
 tracks = 6
 
+# Every `every` generations the saved best is re-run with recording on each
+# of that generation's tracks (~1-2 MB each), into runs/<run>/replays/.
+# Watch them with `cargo run -p viewer -- --replays <run>`. 0 = off.
+[replays]
+every = 10
+
 # Curriculum. Per run:
 #   driving = progress * metres (capped at progress_cap_laps) + time_alive * seconds
 #   reward  = driving * (1 + drift_bonus * drift_quality)

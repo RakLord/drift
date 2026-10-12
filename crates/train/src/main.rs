@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use agent::genome_file::{self, GenomeHeader, SavedGenome};
+use agent::replay_file::{self, Replay, ReplayHeader};
 use common::Rng;
 use common::paths::workspace_path;
 use evo::{Curriculum, Ids, Island, Stage, migrate};
@@ -107,6 +108,37 @@ fn library_tracks(fixed: &[String]) -> Vec<Arc<Track>> {
         .filter_map(|p| TrackDef::load(p).ok().filter(|def| def.test).and_then(|def| Track::build(def).ok()))
         .map(Arc::new)
         .collect()
+}
+
+/// Record the saved best on each of the generation's tracks. Returns how
+/// many replays were written.
+#[allow(clippy::too_many_arguments)]
+fn save_replays(
+    run_dir: &Path,
+    run: &str,
+    genome: &SavedGenome,
+    saved: &Saved,
+    stage: &str,
+    tracks: &[Arc<Track>],
+    seeds: &[u64],
+    env: &Env,
+) -> Result<usize, String> {
+    let h = &genome.header;
+    let runs = runner::record_genome(&h.spec, &genome.params, tracks, seeds, env);
+    for (k, ((result, recording), track)) in runs.into_iter().zip(tracks).enumerate() {
+        // Deterministic: the recording is the run that was scored.
+        if saved.runs.get(k) != Some(&result) {
+            eprintln!("warning: replay of gen {} track {k} differs from its scored run", h.generation);
+        }
+        let title = format!("{run} gen {} ({stage}) on {}", h.generation, track.def.name);
+        let mut header = ReplayHeader::new(title, result, track.def.clone(), env.car.clone(), env.scoring.clone());
+        (header.run, header.generation, header.island, header.stage, header.fitness) =
+            (run.to_owned(), h.generation, h.island, stage.to_owned(), h.fitness);
+        let replay = Replay { header, recording, genome: Some(genome.clone()), dropped: None };
+        let path = run_dir.join("replays").join(format!("g{:05}_t{k}.replay", h.generation));
+        replay_file::save(&path, &replay).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(tracks.len())
 }
 
 /// Pick the driver to save as best.genome. Without `[best]`, the fittest.
@@ -311,6 +343,10 @@ fn run(args: Args) -> Result<(), String> {
             params: best_genome.params.clone(),
         };
         genome_file::save(run_dir.join("best.genome"), &file).map_err(|e| e.to_string())?;
+        if cfg.replays.every > 0 && generation % cfg.replays.every == 0 {
+            let written = save_replays(&run_dir, &args.name, &file, &saved, &stage.name, &tracks, &seeds, &stage_env)?;
+            report.replays = written;
+        }
 
         // Judged on all the saved driver's runs, so one lucky draw can't
         // move the curriculum on.

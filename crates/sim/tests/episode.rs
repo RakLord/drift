@@ -154,3 +154,25 @@ fn clutch_kicks_are_free_but_holding_it_counts() {
     assert!((share - 0.4).abs() < 0.05, "held {:.0}% of the time", share * 100.0);
     assert!(held.stats.clutch_hold_angle <= held.stats.clutch_hold_time);
 }
+
+#[test]
+fn recording_matches_the_run_and_never_changes_it() {
+    let plain = episode(9).run(&mut Random(Rng::new(4)));
+    let (result, rec) = episode(9).run_recorded(&mut Random(Rng::new(4)));
+    assert_eq!(result, plain, "recording changes nothing");
+
+    assert_eq!(rec.ticks, result.stats.ticks);
+    // A frame every 4 ticks, plus the end if it fell between frames.
+    let every = u64::from(rec.frame_every);
+    assert_eq!(rec.frames.len() as u64, rec.ticks / every + 1 + u64::from(rec.ticks % every != 0));
+    assert_eq!(rec.frame_tick(rec.frames.len() - 1), rec.ticks);
+    let last = rec.frames.last().unwrap();
+    assert!(last.progress <= result.progress + 1e-9, "result progress is the best reached");
+    assert_eq!(last.score, result.score, "the last frame has the final score");
+    // One decision per 4 ticks, each with the full input vector.
+    assert!(rec.decisions.len() as u64 >= rec.ticks / every);
+    assert!(rec.decisions.iter().all(|d| d.inputs.len() == INPUTS));
+    assert!(rec.decisions.windows(2).all(|w| w[1].tick - w[0].tick == every));
+    // Interpolation lands on the frames themselves.
+    assert_eq!(rec.frame_at(rec.frame_tick(3) as f64), rec.frames[3]);
+}

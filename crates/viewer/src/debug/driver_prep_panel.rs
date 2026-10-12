@@ -7,8 +7,13 @@ use sim::World;
 use crate::render::{text, theme};
 
 pub fn draw(world: &World, view_w: f32) {
+    draw_at(world, view_w, screen_height());
+}
+
+/// Laid out from `bottom` instead of the bottom of the screen.
+pub fn draw_at(world: &World, view_w: f32, bottom: f32) {
     let notes = driver_prep::upcoming(&world.track, world.place.distance);
-    let (w, h) = (view_w, screen_height());
+    let (w, h) = (view_w, bottom);
     let (x, y, width) = ((w - 420.0).max(16.0), h - 260.0, 404.0);
     draw_rectangle(x, y, width, 94.0, theme::PANEL);
     text("DRIVER PREP", x + 12.0, y + 22.0, 20.0, theme::NEON_CYAN);

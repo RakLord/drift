@@ -7,7 +7,7 @@ use super::suspension::SuspensionState;
 use crate::Controls;
 
 /// Per-wheel state. Rear wheels always share one spin rate (welded diff).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct WheelState {
     /// Spin rate, rad/s. Positive = rolling forward.
     pub omega: f64,

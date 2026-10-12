@@ -10,6 +10,7 @@ use nn::{Network, NetworkSpec};
 use rayon::prelude::*;
 use sim::car::CarParams;
 use sim::episode::{Episode, EpisodeConfig, EpisodeResult};
+use sim::recording::Recording;
 use sim::scoring::ScoringParams;
 use sim::track::Track;
 use sim::track::generator::{self, GeneratorParams};
@@ -63,6 +64,26 @@ pub fn run_genome(spec: &NetworkSpec, params: &[f32], tracks: &[Arc<Track>], see
         .map(|(track, &seed)| {
             let episode = Episode::new(track.clone(), env.car.clone(), env.scoring.clone(), env.episode.clone(), seed);
             episode.run(&mut driver)
+        })
+        .collect()
+}
+
+/// Drive one network round every track (in parallel), recording each run.
+/// The runs are identical to unrecorded ones with the same seeds.
+pub fn record_genome(
+    spec: &NetworkSpec,
+    params: &[f32],
+    tracks: &[Arc<Track>],
+    seeds: &[u64],
+    env: &Env,
+) -> Vec<(EpisodeResult, Recording)> {
+    tracks
+        .par_iter()
+        .zip(seeds)
+        .map(|(track, &seed)| {
+            let mut driver = NnDriver::new(Network::new(spec.clone(), params.to_vec()));
+            let episode = Episode::new(track.clone(), env.car.clone(), env.scoring.clone(), env.episode.clone(), seed);
+            episode.run_recorded(&mut driver)
         })
         .collect()
 }

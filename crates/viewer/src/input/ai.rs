@@ -212,6 +212,11 @@ impl AiDriver {
         self.current.as_ref().map(|(_, d)| &d.network)
     }
 
+    /// The genome driving now.
+    pub fn genome(&self) -> Option<SavedGenome> {
+        self.current.as_ref().map(|(h, d)| SavedGenome { header: h.clone(), params: d.network.params().to_vec() })
+    }
+
     pub fn generation(&self) -> Option<u32> {
         self.current.as_ref().map(|(h, _)| h.generation)
     }

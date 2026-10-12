@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use macroquad::prelude::*;
 
 use crate::screens::play::PlayScreen;
+use crate::screens::replay::{self, ReplayScreen};
 
 #[derive(Default)]
 pub struct Options {
@@ -32,10 +33,15 @@ pub struct Options {
     pub charts: bool,
     /// Start with the network view open (split).
     pub net: bool,
+    /// Watch this replay file.
+    pub replay: Option<PathBuf>,
+    /// Open the replay picker (with `--replays <run>`).
+    pub replays: bool,
 }
 
 impl Options {
-    /// `[--seed N | --track path] [--map] [--generator] [--library] [--genome path | --follow run] [--net] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
+    /// `[--seed N | --track path] [--map] [--generator] [--library] [--genome path | --follow run] [--net]
+    /// [--replay file | --replays run] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
     pub fn from_args() -> Self {
         let mut options = Self::default();
         let mut frames = 240;
@@ -55,6 +61,18 @@ impl Options {
                 "--net" => options.net = true,
                 "--genome" => options.genome = args.next().map(PathBuf::from),
                 "--charts" => options.charts = true,
+                "--replay" => options.replay = args.next().map(PathBuf::from),
+                "--replays" => {
+                    // A run's newest replay, with the picker open.
+                    if let Some(run) = args.next() {
+                        let dir = common::paths::workspace_path("runs").join(&run);
+                        match replay::newest(&dir) {
+                            Some(path) => options.replay = Some(path),
+                            None => eprintln!("no replays in {}", dir.join("replays").display()),
+                        }
+                        options.replays = true;
+                    }
+                }
                 "--follow" => {
                     // A run name (runs/<name>/best.genome) or a genome path.
                     options.genome = args.next().map(|run| {
@@ -80,25 +98,51 @@ pub enum Flow {
     Exit,
 }
 
+enum Screen {
+    Play(Box<PlayScreen>),
+    Replay(Box<ReplayScreen>),
+}
+
 pub struct App {
     options: Options,
-    play: PlayScreen,
+    screen: Screen,
     frame: u32,
 }
 
 impl App {
     pub fn new(options: Options) -> Self {
-        let play = PlayScreen::new(&options);
-        Self { options, play, frame: 0 }
+        let replay = options.replay.clone().map(|path| ReplayScreen::new(path, options.replays, options.charts));
+        let screen = match replay {
+            Some(Ok(mut replay)) => {
+                if options.net {
+                    replay.open_network();
+                }
+                Screen::Replay(Box::new(replay))
+            }
+            Some(Err(err)) => {
+                eprintln!("{err}");
+                Screen::Play(Box::new(PlayScreen::new(&options)))
+            }
+            None => Screen::Play(Box::new(PlayScreen::new(&options))),
+        };
+        Self { options, screen, frame: 0 }
     }
 
     pub fn frame(&mut self) -> Flow {
         // A screenshot run uses a fixed frame time so it is reproducible.
         // Checked before the frame runs: Esc that cancels typing mustn't quit.
-        let typing = self.play.captures_keyboard();
+        let typing = matches!(&self.screen, Screen::Play(play) if play.captures_keyboard());
         let dt = if self.options.screenshot.is_some() { 1.0 / 60.0 } else { f64::from(get_frame_time()) };
-        self.play.update(dt);
-        self.play.draw();
+        match &mut self.screen {
+            Screen::Play(play) => {
+                play.update(dt);
+                play.draw();
+            }
+            Screen::Replay(replay) => {
+                replay.update(dt);
+                replay.draw();
+            }
+        }
         self.frame += 1;
 
         if let Some((path, frames)) = &self.options.screenshot

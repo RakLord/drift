@@ -23,6 +23,9 @@ pub struct TrainingConfig {
     /// runs still resume).
     #[serde(default)]
     pub best: BestConfig,
+    /// Replays of the saved best (off if missing, so older runs still resume).
+    #[serde(default)]
+    pub replays: ReplayConfig,
     pub curriculum: Vec<Stage>,
 }
 
@@ -66,6 +69,14 @@ impl BestConfig {
     pub fn enabled(&self) -> bool {
         self.candidates > 1 && self.tracks > 0
     }
+}
+
+/// Every `every` generations, the saved best is re-run with recording on
+/// each of that generation's tracks, into runs/<run>/replays/. 0 = off.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplayConfig {
+    pub every: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
