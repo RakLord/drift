@@ -81,6 +81,7 @@ pub struct ReplayScreen {
     show_inputs: bool,
     show_help: bool,
     toast: Option<(String, f64)>,
+    switch: Option<super::Switch>,
 }
 
 impl ReplayScreen {
@@ -127,9 +128,19 @@ impl ReplayScreen {
             show_inputs: false,
             show_help: true,
             toast,
+            switch: None,
         };
         screen.show_frame();
         Ok(screen)
+    }
+
+    /// Another view asked for (Q: this run's top cars), if any.
+    pub fn take_switch(&mut self) -> Option<super::Switch> {
+        self.switch.take()
+    }
+
+    pub fn notify(&mut self, message: String) {
+        self.toast = Some((message, 5.0));
     }
 
     /// Start with the network view split beside the track (`--net`).
@@ -276,6 +287,13 @@ impl ReplayScreen {
         if is_key_pressed(KeyCode::Period) {
             self.playing = false;
             self.seek = Some((((self.tick / frame).floor() + 1.0) * frame).min(self.end_tick()));
+        }
+        if is_key_pressed(KeyCode::Q) {
+            let run = Some(self.replay.header.run.clone()).filter(|r| !r.is_empty()).or_else(|| self.path.parent().and_then(super::run_of));
+            match run {
+                Some(run) => self.switch = Some(super::Switch::Watch(run)),
+                None => self.toast = Some(("not from a training run".to_owned(), 3.0)),
+            }
         }
         if is_key_pressed(KeyCode::Home) {
             self.seek = Some(0.0);
@@ -430,7 +448,7 @@ impl ReplayScreen {
         let help: &[&str] = if self.show_help {
             &[
                 "Space play/pause  Left/Right -/+2 s  , . frame  Home restart  [ ] speed  timeline: click/drag",
-                "O replays  Up/Down prev/next  V network  I inputs  M map  E effects  T telemetry  C run charts  H help",
+                "O replays  Up/Down prev/next  Q top cars  V network  I inputs  M map  E effects  T telemetry  C run charts  H help",
             ]
         } else {
             &["H: help"]

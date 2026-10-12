@@ -155,6 +155,18 @@ impl App {
         Ok(format!("viewer following {} on {on}", run.name))
     }
 
+    /// The run's top genomes racing together (multi-car view).
+    pub fn watch_top(&mut self, run: &Run) -> Flow {
+        self.children.viewer(&["--watch".into(), run.name.clone()])?;
+        Ok(format!("viewer racing {}'s top cars", run.name))
+    }
+
+    /// The run's replays, newest first.
+    pub fn replays(&mut self, run: &Run) -> Flow {
+        self.children.viewer(&["--replays".into(), run.name.clone()])?;
+        Ok(format!("viewer playing {}'s replays", run.name))
+    }
+
     fn open_viewer(&mut self, run: &str, track: Option<&String>) -> Result<(), String> {
         let mut args = vec!["--follow".to_string(), run.to_string()];
         if let Some(track) = track {
@@ -216,13 +228,24 @@ impl App {
         let run = Select::new("Runs:", runs.iter().collect()).with_page_size(15).prompt()?;
         let has_best = run.dir.join("best.genome").exists();
         let has_log = run.log().exists();
+        let has_top = run.dir.join("top.genomes").exists();
+        let has_replays = std::fs::read_dir(run.dir.join("replays"))
+            .is_ok_and(|mut d| d.any(|e| e.is_ok_and(|e| e.path().extension().is_some_and(|x| x == "replay"))));
         let mut actions = vec![];
         if run.running() {
-            actions.extend(["Watch live", "Show log", "Stop training"]);
+            actions.push("Watch live");
+        } else if has_best {
+            actions.push("Watch best driver");
+        }
+        if has_top {
+            actions.push("Watch top cars (multi-car)");
+        }
+        if has_replays {
+            actions.push("Replays");
+        }
+        if run.running() {
+            actions.extend(["Show log", "Stop training"]);
         } else {
-            if has_best {
-                actions.push("Watch best driver");
-            }
             actions.push("Resume training…");
             if has_log {
                 actions.push("Show log");
@@ -230,6 +253,8 @@ impl App {
         }
         match Select::new(&format!("{}:", run.name), actions).prompt()? {
             "Watch live" | "Watch best driver" => self.watch(run),
+            "Watch top cars (multi-car)" => self.watch_top(run),
+            "Replays" => self.replays(run),
             "Stop training" => self.stop(run),
             "Resume training…" => self.resume(run),
             _ => show_log(run),

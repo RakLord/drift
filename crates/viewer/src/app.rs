@@ -6,6 +6,8 @@ use macroquad::prelude::*;
 
 use crate::screens::play::PlayScreen;
 use crate::screens::replay::{self, ReplayScreen};
+use crate::screens::Switch;
+use crate::screens::watch::WatchScreen;
 
 #[derive(Default)]
 pub struct Options {
@@ -37,11 +39,13 @@ pub struct Options {
     pub replay: Option<PathBuf>,
     /// Open the replay picker (with `--replays <run>`).
     pub replays: bool,
+    /// Race this run's top genomes live.
+    pub watch: Option<String>,
 }
 
 impl Options {
     /// `[--seed N | --track path] [--map] [--generator] [--library] [--genome path | --follow run] [--net]
-    /// [--replay file | --replays run] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
+    /// [--replay file | --replays run | --watch run] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
     pub fn from_args() -> Self {
         let mut options = Self::default();
         let mut frames = 240;
@@ -62,6 +66,7 @@ impl Options {
                 "--genome" => options.genome = args.next().map(PathBuf::from),
                 "--charts" => options.charts = true,
                 "--replay" => options.replay = args.next().map(PathBuf::from),
+                "--watch" => options.watch = args.next(),
                 "--replays" => {
                     // A run's newest replay, with the picker open.
                     if let Some(run) = args.next() {
@@ -92,6 +97,34 @@ impl Options {
     }
 }
 
+impl App {
+    /// Open another view of a run, keeping the play screen to come back to.
+    fn open(&mut self, switch: Switch) {
+        let next = match &switch {
+            Switch::Watch(run) => Ok(Screen::Watch(Box::new(WatchScreen::new(run, false)))),
+            Switch::Replays(run) => {
+                let dir = common::paths::workspace_path("runs").join(run);
+                replay::newest(&dir)
+                    .ok_or_else(|| format!("no replays for {run} yet"))
+                    .and_then(|path| ReplayScreen::new(path, true, false))
+                    .map(|r| Screen::Replay(Box::new(r)))
+            }
+        };
+        match next {
+            Ok(next) => match std::mem::replace(&mut self.screen, next) {
+                Screen::Play(play) => self.back = Some(play),
+                // Watch <-> replays: the play screen (if any) stays put.
+                Screen::Replay(_) | Screen::Watch(_) => {}
+            },
+            Err(err) => match &mut self.screen {
+                Screen::Play(play) => play.notify(err),
+                Screen::Replay(replay) => replay.notify(err),
+                Screen::Watch(watch) => watch.notify(err),
+            },
+        }
+    }
+}
+
 #[derive(PartialEq, Eq)]
 pub enum Flow {
     Continue,
@@ -101,16 +134,26 @@ pub enum Flow {
 enum Screen {
     Play(Box<PlayScreen>),
     Replay(Box<ReplayScreen>),
+    Watch(Box<WatchScreen>),
 }
 
 pub struct App {
     options: Options,
     screen: Screen,
+    /// The play screen to go back to (Esc) from a view opened with Q / J.
+    back: Option<Box<PlayScreen>>,
     frame: u32,
 }
 
 impl App {
     pub fn new(options: Options) -> Self {
+        if let Some(run) = &options.watch {
+            let mut watch = WatchScreen::new(run, options.charts);
+            if options.net {
+                watch.open_network();
+            }
+            return Self { screen: Screen::Watch(Box::new(watch)), options, back: None, frame: 0 };
+        }
         let replay = options.replay.clone().map(|path| ReplayScreen::new(path, options.replays, options.charts));
         let screen = match replay {
             Some(Ok(mut replay)) => {
@@ -125,7 +168,7 @@ impl App {
             }
             None => Screen::Play(Box::new(PlayScreen::new(&options))),
         };
-        Self { options, screen, frame: 0 }
+        Self { options, screen, back: None, frame: 0 }
     }
 
     pub fn frame(&mut self) -> Flow {
@@ -133,15 +176,25 @@ impl App {
         // Checked before the frame runs: Esc that cancels typing mustn't quit.
         let typing = matches!(&self.screen, Screen::Play(play) if play.captures_keyboard());
         let dt = if self.options.screenshot.is_some() { 1.0 / 60.0 } else { f64::from(get_frame_time()) };
-        match &mut self.screen {
+        let switch = match &mut self.screen {
             Screen::Play(play) => {
                 play.update(dt);
                 play.draw();
+                play.take_switch()
             }
             Screen::Replay(replay) => {
                 replay.update(dt);
                 replay.draw();
+                replay.take_switch()
             }
+            Screen::Watch(watch) => {
+                watch.update(dt);
+                watch.draw();
+                watch.take_switch()
+            }
+        };
+        if let Some(switch) = switch {
+            self.open(switch);
         }
         self.frame += 1;
 
@@ -159,7 +212,11 @@ impl App {
             return Flow::Exit;
         }
         if is_key_pressed(KeyCode::Escape) && !typing {
-            return Flow::Exit;
+            // Back from a view opened with Q / J; otherwise quit.
+            match self.back.take() {
+                Some(play) if !matches!(self.screen, Screen::Play(_)) => self.screen = Screen::Play(play),
+                _ => return Flow::Exit,
+            }
         }
         Flow::Continue
     }

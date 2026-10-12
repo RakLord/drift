@@ -21,6 +21,7 @@ use std::time::Instant;
 
 use agent::genome_file::{self, GenomeHeader, SavedGenome};
 use agent::replay_file::{self, Replay, ReplayHeader};
+use agent::top_file::{self, TopEntry, TopGenomes, TopHeader};
 use common::Rng;
 use common::paths::workspace_path;
 use evo::{Curriculum, Ids, Island, Stage, migrate};
@@ -33,7 +34,7 @@ use sim::track::generator::GeneratorParams;
 use sim::track::{Track, TrackDef};
 
 use checkpoint::Population;
-use config::TrainingConfig;
+use config::{TrainingConfig, WatchConfig};
 use metrics::{MetricsCsv, Report, Saved};
 use runner::{Env, evaluate, evaluate_some, run_genome};
 
@@ -139,6 +140,59 @@ fn save_replays(
         replay_file::save(&path, &replay).map_err(|e| format!("{}: {e}", path.display()))?;
     }
     Ok(tracks.len())
+}
+
+/// Write top.genomes for the live viewer: the top few of each island by
+/// fitness, then the best drifters not already in.
+#[allow(clippy::too_many_arguments)]
+fn save_top(
+    path: &Path,
+    run: &str,
+    generation: u32,
+    stage: &str,
+    islands: &[Island],
+    results: &[Vec<Vec<EpisodeResult>>],
+    watch: &WatchConfig,
+    env: &Env,
+) -> Result<(), String> {
+    let mut ranked: Vec<(usize, usize)> =
+        islands.iter().enumerate().flat_map(|(i, island)| (0..island.fitness.len()).map(move |g| (i, g))).collect();
+    ranked.sort_by(|&(ai, ag), &(bi, bg)| islands[bi].fitness[bg].total_cmp(&islands[ai].fitness[ag]));
+    let quality = |&(i, g): &(usize, usize)| {
+        let runs = &results[i][g];
+        runs.iter().map(evo::fitness::drift_quality).sum::<f64>() / runs.len().max(1) as f64
+    };
+
+    let mut picked: Vec<((usize, usize), bool)> = vec![];
+    for island in 0..islands.len() {
+        picked.extend(ranked.iter().filter(|(i, _)| *i == island).take(watch.per_island).map(|&k| (k, false)));
+    }
+    let mut by_quality = ranked.clone();
+    by_quality.sort_by(|a, b| quality(b).total_cmp(&quality(a)));
+    let drifters: Vec<_> =
+        by_quality.into_iter().filter(|k| !picked.iter().any(|(p, _)| p == k)).take(watch.drifters).collect();
+    picked.extend(drifters.into_iter().map(|k| (k, true)));
+
+    let mut entries = vec![];
+    let mut genomes = vec![];
+    for ((i, g), drifter) in picked {
+        let island = &islands[i];
+        let fitness = island.fitness[g];
+        let rank = ranked.iter().position(|&k| k == (i, g)).unwrap_or(0) as u32 + 1;
+        entries.push(TopEntry { id: island.genomes[g].id, island: i as u32, rank, fitness, drift_quality: quality(&(i, g)), drifter });
+        let header = GenomeHeader::new(island.spec.clone(), generation, i as u32, fitness, format!("{run} gen {generation} #{rank}"));
+        genomes.push(SavedGenome { header, params: island.genomes[g].params.clone() });
+    }
+    let header = TopHeader {
+        run: run.to_owned(),
+        generation,
+        stage: stage.to_owned(),
+        episode: env.episode.clone(),
+        scoring: env.scoring.clone(),
+        car: env.car.clone(),
+        entries,
+    };
+    top_file::save(path, &TopGenomes { header, genomes }).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Pick the driver to save as best.genome. Without `[best]`, the fittest.
@@ -343,6 +397,8 @@ fn run(args: Args) -> Result<(), String> {
             params: best_genome.params.clone(),
         };
         genome_file::save(run_dir.join("best.genome"), &file).map_err(|e| e.to_string())?;
+        let top = run_dir.join("top.genomes");
+        save_top(&top, &args.name, generation, &stage.name, &pop.islands, &results, &cfg.watch, &stage_env)?;
         if cfg.replays.every > 0 && generation % cfg.replays.every == 0 {
             let written = save_replays(&run_dir, &args.name, &file, &saved, &stage.name, &tracks, &seeds, &stage_env)?;
             report.replays = written;

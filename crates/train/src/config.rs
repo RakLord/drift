@@ -26,6 +26,9 @@ pub struct TrainingConfig {
     /// Replays of the saved best (off if missing, so older runs still resume).
     #[serde(default)]
     pub replays: ReplayConfig,
+    /// Genomes for the live multi-car viewer (defaults if missing).
+    #[serde(default)]
+    pub watch: WatchConfig,
     pub curriculum: Vec<Stage>,
 }
 
@@ -77,6 +80,22 @@ impl BestConfig {
 #[serde(deny_unknown_fields)]
 pub struct ReplayConfig {
     pub every: u32,
+}
+
+/// Written to runs/<run>/top.genomes every generation for `viewer --watch`:
+/// the top `per_island` of each island by fitness, plus the `drifters` best
+/// by drift quality not already picked.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WatchConfig {
+    pub per_island: usize,
+    pub drifters: usize,
+}
+
+impl Default for WatchConfig {
+    fn default() -> Self {
+        Self { per_island: 5, drifters: 10 }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

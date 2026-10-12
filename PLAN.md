@@ -40,7 +40,8 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 
 **In progress: M4** (network view and run dashboard already done)
 - Done: replays (see *Replays*): the trainer records the saved best every `replays.every` gens; the viewer plays them back (`--replays <run>`), and `X` saves the last AI run.
-- Next: live multi-car viewer, then the human review grid, then visual polish.
+- Done: live multi-car viewer (see *Live multi-car viewer*): `--watch <run>` races the run's `top.genomes` together.
+- Next: the human review grid, then visual polish.
 
 **Conventions**
 - The sim uses `f64` (SI units). The NN will use `f32`.
@@ -61,6 +62,8 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `cargo run -p viewer -- --follow <run>`: watch a run live (picks up each new best between runs)
 - `--track tracks/<file>.toml` on any viewer command: drive/watch on that saved track instead of `test_loop`
 - `V` while an AI drives: network view (add `--net` to start with it open)
+- `cargo run -p viewer -- --watch <run>`: the run's top genomes racing live (Tab / click to follow, `O` leaderboard)
+- While following a run (`--follow`): `Q` opens its top cars, `J` its replays (`Q` / `J` also switch between those two); Esc goes back. `cargo drift` → Runs → a run has the same two options
 - `cargo run -p viewer -- --replays <run>`: watch a run's replays (newest first, picker open); `--replay <file>` for one file; `X` while an AI drives saves its last run
 
 **Tuning notes**
@@ -249,6 +252,13 @@ Outputs are produced once per decision and held until the next one.
   - the trainer: every `replays.every` generations (default 10), the saved best re-run on each of that generation's tracks (identical to its scored run), into `runs/<run>/replays/`
   - the viewer: `X` saves the last AI run (AI runs only).
 - **Playback:** interpolated between frames; smoke, skids and sparks regenerate from the recorded wheel states and contacts. `--replay <file>` or `--replays <run>` (picker). Timeline with score-event ticks, click/drag to seek; Space play/pause, `,` `.` step, `[` `]` speed; the usual toggles. Seeking rebuilds the effects from the start.
+
+## Live multi-car viewer
+
+- **What:** `--watch <run>`: the run's top genomes drive one track together, live, from the same rolling start. Ghosts (no car-to-car contact); each runs exactly as in training.
+- **Which:** the trainer writes `runs/<run>/top.genomes` every generation (atomically): the top `watch.per_island` (5) of each island by fitness, plus the `watch.drifters` (10) best by drift quality not already in. The file carries the stage's actual rules (episode, scoring, car), so cars run under the rules they were scored on. A newer file is picked up when the current heat ends.
+- **Look:** cars coloured by island (validated palette), the followed car highlighted. Full effects (smoke, sparks, damage) on the followed car; every car leaves skid marks. Finished cars stay where they stopped, faded.
+- **Controls:** click a car or `Tab` to follow it; leaderboard panel (rank, island, score, angle, status; click a row); `M` map; `V` network and `I` inputs for the followed car; `R` restart the heat; `L` / `N` change track (default: the run's fixed track).
 
 ## Human review
 

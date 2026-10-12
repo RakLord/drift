@@ -77,6 +77,13 @@ tracks = 6
 [replays]
 every = 10
 
+# The genomes `cargo run -p viewer -- --watch <run>` races together, written
+# to runs/<run>/top.genomes every generation: the top `per_island` of each
+# island by fitness, plus the `drifters` best by drift quality not already in.
+[watch]
+per_island = 5
+drifters = 10
+
 # Curriculum. Per run:
 #   driving = progress * metres (capped at progress_cap_laps) + time_alive * seconds
 #   reward  = driving * (1 + drift_bonus * drift_quality)

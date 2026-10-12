@@ -63,6 +63,13 @@ impl FollowCamera {
         });
     }
 
+    /// The world point under screen pixel (x, y).
+    pub fn screen_to_world(&self, x: f32, y: f32) -> Vec2 {
+        let dx = f64::from(x - self.view_w / 2.0);
+        let dy = f64::from(screen_height() / 2.0 - y);
+        self.center + Vec2::new(dx, dy) / self.pixels_per_metre
+    }
+
     /// World-space corners (min, max) of what is on screen.
     pub fn visible(&self) -> (Vec2, Vec2) {
         let half = Vec2::new(f64::from(self.view_w), f64::from(screen_height())) / (2.0 * self.pixels_per_metre);

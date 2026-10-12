@@ -77,6 +77,8 @@ pub struct PlayScreen {
     ai: Option<AiDriver>,
     /// Records AI runs so `X` can save the last as a replay.
     ai_recorder: AiRecorder,
+    /// Another view of the run asked for (Q / J), for the app to open.
+    switch: Option<super::Switch>,
     show_inputs: bool,
     dashboard: crate::dashboard::Dashboard,
     net_view: NetView,
@@ -156,6 +158,7 @@ impl PlayScreen {
             autopilot: (options.autopilot || options.donut).then(|| Autopilot::new(options.donut)),
             ai,
             ai_recorder: AiRecorder::new(),
+            switch: None,
             show_inputs: false,
             dashboard: crate::dashboard::Dashboard::new(
                 options.genome.as_ref().and_then(|g| g.parent()).map(|run| run.join("metrics.csv")),
@@ -357,6 +360,16 @@ impl PlayScreen {
         self.dashboard.draw();
     }
 
+    /// Another view the player asked for, if any.
+    pub fn take_switch(&mut self) -> Option<super::Switch> {
+        self.switch.take()
+    }
+
+    /// Show a message.
+    pub fn notify(&mut self, message: String) {
+        self.toast = Some((message, 5.0));
+    }
+
     /// Whether keys are going to a text field (so Esc mustn't quit).
     pub fn captures_keyboard(&self) -> bool {
         self.library.typing()
@@ -527,6 +540,14 @@ impl PlayScreen {
         if is_key_pressed(KeyCode::K) {
             self.keep_track();
         }
+        if let Some(run) = self.ai.as_ref().and_then(|ai| super::run_of(&ai.path)) {
+            if is_key_pressed(KeyCode::Q) {
+                self.switch = Some(super::Switch::Watch(run.clone()));
+            }
+            if is_key_pressed(KeyCode::J) {
+                self.switch = Some(super::Switch::Replays(run));
+            }
+        }
         if is_key_pressed(KeyCode::X) && self.ai.is_some() {
             self.toast = Some(match self.ai_recorder.save(self.ai.as_ref()) {
                 Ok(path) => (format!("saved replay {}", path.display()), 4.0),
@@ -696,7 +717,7 @@ impl PlayScreen {
                 "pad: stick steer  RT throttle  LT brake  A/RB handbrake  X/LB clutch  Start reset",
                 "keys: WASD/arrows  Space handbrake  Shift clutch  R reset  P pause  [ ] speed  wheel zoom",
                 "N new track  F generator  L next library track  O library  K keep track  M map  E effects  T telemetry  G gamepad  C run charts  H help",
-                "Y / pad Select: restart a stalled engine   AI (--genome / --follow): Tab take over  I inputs  V network  B newest best  X save last run",
+                "Y / pad Select: restart a stalled engine   AI (--genome / --follow): Tab take over  I inputs  V network  B newest best  X save last run  Q top cars  J replays",
             ]
         } else {
             &["H: help"]

@@ -213,6 +213,15 @@ impl Panel {
     /// A selectable list row: label on the left, detail on the right.
     /// Returns true when clicked.
     pub fn list_item(&mut self, label: &str, detail: &str, selected: bool) -> bool {
+        self.list_item_with(label, detail, selected, None)
+    }
+
+    /// A list item with a colour swatch before its label.
+    pub fn list_item_swatch(&mut self, label: &str, detail: &str, selected: bool, swatch: Color) -> bool {
+        self.list_item_with(label, detail, selected, Some(swatch))
+    }
+
+    fn list_item_with(&mut self, label: &str, detail: &str, selected: bool, swatch: Option<Color>) -> bool {
         if !self.section_open {
             return false;
         }
@@ -226,7 +235,12 @@ impl Panel {
             draw_rectangle(x, top, w, h, theme::GRID_MAJOR);
         }
         let detail_w = measure_text(detail, None, 14, 1.0).width;
-        text(&fit(label, w - detail_w - 24.0, TEXT_SIZE), x + 10.0, top + 21.0, TEXT_SIZE, theme::TEXT);
+        let mut label_x = x + 10.0;
+        if let Some(color) = swatch {
+            draw_rectangle(label_x, top + h / 2.0 - 5.0, 10.0, 10.0, color);
+            label_x += 18.0;
+        }
+        text(&fit(label, w - detail_w - 24.0 - (label_x - x - 10.0), TEXT_SIZE), label_x, top + 21.0, TEXT_SIZE, theme::TEXT);
         text(detail, x + w - detail_w - 8.0, top + 20.0, 14.0, theme::TEXT_DIM);
         self.clicked(x, top, w, h)
     }
