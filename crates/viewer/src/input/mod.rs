@@ -1,5 +1,6 @@
 //! Turns gamepad / keyboard state into car `Controls`.
 
+pub mod ai;
 pub mod autopilot;
 pub mod gamepad;
 pub mod keyboard;

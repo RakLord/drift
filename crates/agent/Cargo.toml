@@ -1,0 +1,16 @@
+[package]
+name = "agent"
+description = "Neural network drivers: plugs a network into sim::Controller, and genome files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+common.workspace = true
+sim.workspace = true
+nn.workspace = true
+serde.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true

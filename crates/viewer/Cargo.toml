@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 common.workspace = true
 sim.workspace = true
+nn.workspace = true
+agent.workspace = true
 macroquad.workspace = true
 gilrs.workspace = true
 toml.workspace = true

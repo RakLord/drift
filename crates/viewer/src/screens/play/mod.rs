@@ -16,8 +16,9 @@ use sim::track::generator::GeneratorParams;
 use sim::track::{Track, TrackDef};
 
 use crate::app::Options;
-use crate::debug::{driver_prep_panel, gamepad_panel, history::History, telemetry};
-use crate::input::{Input, autopilot::Autopilot};
+use crate::debug::{inputs_panel, driver_prep_panel, gamepad_panel, history::History, telemetry};
+use crate::input::{Input, ai::AiDriver, autopilot::Autopilot};
+use crate::paths::workspace_file;
 use crate::render::score::ScoreHud;
 use crate::render::{self, camera::FollowCamera, effects::Effects, ground, hud, text, theme, track::TrackMesh};
 use configs::{Configs, Reload};
@@ -25,6 +26,7 @@ use generator_panel::{GeneratorPanel, PanelAction};
 use tracks::TrackSource;
 
 const TICK: f64 = 1.0 / 120.0;
+const SKIDPAD_TRACK: &str = "tracks/skidpad.toml";
 /// Never simulate more than this many ticks per frame (avoids a death spiral
 /// after a stall, e.g. dragging the window).
 const MAX_TICKS_PER_FRAME: u32 = 12;
@@ -49,6 +51,9 @@ pub struct PlayScreen {
     configs: Configs,
     input: Input,
     autopilot: Option<Autopilot>,
+    /// A trained genome driving (`--genome`).
+    ai: Option<AiDriver>,
+    show_inputs: bool,
     camera: FollowCamera,
     history: History,
     effects: Effects,
@@ -81,17 +86,28 @@ impl PlayScreen {
         let configs = Configs::load(&mut warnings);
         let gen_params = configs.generator();
         let mut source = options.seed.map_or(TrackSource::Library, TrackSource::Generated);
-        let (track, def) = tracks::build(source, configs.library_track(), &gen_params).unwrap_or_else(|err| {
+        // Doughnuts need open space: start on the skidpad instead.
+        let skidpad = options.donut.then(|| TrackDef::load(workspace_file(SKIDPAD_TRACK)));
+        let (track, def) = match skidpad {
+            Some(Ok(def)) => tracks::build(TrackSource::Library, def, &gen_params),
+            Some(Err(err)) => Err(vec![format!("{SKIDPAD_TRACK}: {err}")]),
+            None => tracks::build(source, configs.library_track(), &gen_params),
+        }
+        .unwrap_or_else(|err| {
             warnings.extend(err);
             source = TrackSource::Library;
             tracks::build(source, configs.library_track(), &gen_params).expect("library track must build")
+        });
+
+        let ai = options.genome.as_deref().and_then(|path| {
+            AiDriver::load(path).map_err(|e| warnings.push(e)).ok()
         });
 
         let mesh = TrackMesh::new(&track);
         let scorer = Scorer::new(configs.scoring(), &track);
         let world = World::new(Arc::new(track), configs.car());
         let start = world.car.state.position;
-        Self {
+        let mut screen = Self {
             previous: Pose::of(&world.car.state),
             world,
             source,
@@ -105,7 +121,9 @@ impl PlayScreen {
             score_hud: ScoreHud::new(),
             configs,
             input: Input::new(),
-            autopilot: options.autopilot.then(Autopilot::new),
+            autopilot: (options.autopilot || options.donut).then(|| Autopilot::new(options.donut)),
+            ai,
+            show_inputs: false,
             camera: FollowCamera::new(start),
             history: History::new(),
             effects: Effects::new(),
@@ -118,7 +136,11 @@ impl PlayScreen {
             show_gamepad: false,
             show_help: true,
             toast: (!warnings.is_empty()).then(|| (warnings.join("; "), 8.0)),
+        };
+        if screen.ai.is_some() {
+            screen.reset(); // rolling start
         }
+        screen
     }
 
     pub fn update(&mut self, dt: f64) {
@@ -146,9 +168,10 @@ impl PlayScreen {
         self.accumulator += dt * TIME_SCALES[self.time_scale_index];
         let mut ticks = 0;
         while self.accumulator >= TICK && ticks < MAX_TICKS_PER_FRAME {
-            let controls = match &mut self.autopilot {
-                Some(autopilot) => autopilot.controls(&self.world, TICK),
-                None => input,
+            let controls = match (&mut self.ai, &mut self.autopilot) {
+                (Some(ai), _) if ai.enabled => ai.controls(&self.world, &self.scorer),
+                (_, Some(autopilot)) => autopilot.controls(&self.world, TICK),
+                _ => input,
             };
             self.previous = Pose::of(&self.world.car.state);
             self.world.step(controls, TICK);
@@ -207,6 +230,12 @@ impl PlayScreen {
         if self.show_gamepad {
             gamepad_panel::draw(&self.input.gamepad);
         }
+        if self.show_inputs
+            && let Some(ai) = &self.ai
+            && let Some(observation) = &ai.last_observation
+        {
+            inputs_panel::draw(observation, &ai.decision());
+        }
         self.draw_status();
         // Last, so it sits on top. It handles its own input as it draws.
         if let Some(action) = self.panel.show(&mut self.gen_params, &mut self.gen_seed) {
@@ -227,15 +256,20 @@ impl PlayScreen {
 
     fn reset(&mut self) {
         self.world.reset();
+        if let Some(ai) = &mut self.ai {
+            // Rolling start, as in training.
+            ai.reset();
+            let (position, heading) = self.world.track.start();
+            let speed = crate::input::ai::START_SPEED_KMH / 3.6;
+            self.world.set_car_state(sim::car::CarState::rolling(&self.world.car.params, position, heading, speed));
+        }
         self.previous = Pose::of(&self.world.car.state);
         self.camera.snap_to(self.world.car.state.position);
         self.history.clear();
         self.effects.clear();
         self.scorer = Scorer::new(self.scorer.params.clone(), &self.world.track);
         self.score_hud.clear();
-        if self.autopilot.is_some() {
-            self.autopilot = Some(Autopilot::new());
-        }
+        self.autopilot = self.autopilot.as_ref().map(Autopilot::restarted);
     }
 
     /// Switch to the track for `source`, keeping the current one on failure.
@@ -268,7 +302,13 @@ impl PlayScreen {
     }
 
     fn handle_keys(&mut self) {
-        let toggles: [(KeyCode, &mut bool); 7] = [
+        if is_key_pressed(KeyCode::Tab)
+            && let Some(ai) = &mut self.ai
+        {
+            ai.enabled = !ai.enabled;
+        }
+        let toggles: [(KeyCode, &mut bool); 8] = [
+            (KeyCode::I, &mut self.show_inputs),
             (KeyCode::F, &mut self.panel.open),
             (KeyCode::P, &mut self.paused),
             (KeyCode::E, &mut self.show_effects),
@@ -371,8 +411,11 @@ impl PlayScreen {
         if scale != 1.0 {
             status.push(format!("{scale}x speed"));
         }
-        if self.autopilot.is_some() {
-            status.push("AUTOPILOT".to_owned());
+        match &self.ai {
+            Some(ai) if ai.enabled => status.push(format!("AI: {}", ai.describe())),
+            Some(_) => status.push("YOU (Tab: hand back to the AI)".to_owned()),
+            None if self.autopilot.is_some() => status.push("AUTOPILOT".to_owned()),
+            None => {}
         }
         if !status.is_empty() {
             text(&status.join("   "), w / 2.0 - 80.0, h - 70.0, 28.0, theme::SODIUM);
@@ -390,6 +433,7 @@ impl PlayScreen {
                 "pad: stick steer  RT throttle  LT brake  A/RB handbrake  X/LB clutch  Start reset",
                 "keys: WASD/arrows  Space handbrake  Shift clutch  R reset  P pause  [ ] speed  wheel zoom",
                 "N new track  F generator  L library track  K keep track  M map  E effects  T telemetry  G gamepad  H help",
+                "AI (--genome): Tab take over / hand back  I inputs panel",
             ]
         } else {
             &["H: help"]

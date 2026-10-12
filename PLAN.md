@@ -19,7 +19,15 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
   - procedural drift-track generator with figure-8 crossroads (`track/generator/`, `track/crossings.rs`, `config/generator.toml`)
   - viewer: `N` new track, `F` generator panel (sliders, save as defaults), `K` keep track, `M` map view
   - track, car, scoring and generator files all hot-reload in the viewer
-- Next: M1 is feature-complete apart from tuning. M2 (NN + GA + headless trainer) follows.
+- M1 is feature-complete apart from tuning.
+
+**In progress: M2**
+- Done:
+  - `sim`: observation (110 inputs, layout in `sensors/observation.rs`), `Controller` trait, `episode.rs` (rolling start, early termination, stats)
+  - `nn` (own network library), `agent` (network driver, `.genome` files), `evo` (islands, neuron-level crossover, self-adaptive mutation, curriculum)
+  - `train`: headless trainer with `config/training.toml`, `runs/<name>/` (metrics.csv, best.genome, checkpoints, config snapshot)
+  - viewer `--genome` watch mode (`Tab` take over, `I` inputs panel)
+- Next: review the first full run, then M3 (drift stages).
 
 **Conventions**
 - The sim uses `f64` (SI units). The NN will use `f32`.
@@ -34,6 +42,8 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `cargo test -p sim --test physics -- --nocapture --test-threads=1`: physics numbers
 - `cargo run -p viewer -- --screenshot out.png --frames 420 --autopilot`: render a scripted lap to PNG (dev check for visuals)
 - `cargo run -p viewer -- --seed 7 --map`: open generated track 7 in map view
+- `cargo run --release -p train -- --name <run> [--generations N] [--stage N] [--resume]`: train
+- `cargo run -p viewer -- --genome runs/<run>/best.genome`: watch a trained driver
 
 **Tuning notes**
 - It feels a little icy on keyboard. Retest on gamepad before tuning.

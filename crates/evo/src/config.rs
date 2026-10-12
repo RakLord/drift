@@ -1,0 +1,28 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GaConfig {
+    /// Genomes per island.
+    pub population: usize,
+    /// Share of each island copied unchanged into the next generation.
+    pub elite_fraction: f64,
+    pub tournament_size: usize,
+    /// Chance a child comes from crossover rather than one parent.
+    pub crossover_rate: f64,
+    /// Chance each parameter is mutated.
+    pub mutation_rate: f64,
+    /// Mutation step size: starting value, limits, and how fast it adapts.
+    pub sigma_start: f64,
+    pub sigma_min: f64,
+    pub sigma_max: f64,
+    pub sigma_adapt: f64,
+    /// Chance a parameter is thrown away and re-drawn.
+    pub reset_rate: f64,
+    /// Fresh random genomes per island per generation.
+    pub immigrants: usize,
+    /// Every this many generations, the weakest island may be replaced...
+    pub migration_every: u32,
+    /// ...if its best fitness is below this share of the best island's.
+    pub migration_gap: f64,
+}

@@ -2,11 +2,13 @@
 
 use std::ops::{Add, AddAssign};
 
+use serde::{Deserialize, Serialize};
+
 use super::params::ComboParams;
 
 /// Points split by judging category. Penalties are kept separate and are
 /// never multiplied.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Breakdown {
     pub line: f64,
     pub angle: f64,

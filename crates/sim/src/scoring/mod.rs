@@ -145,6 +145,13 @@ impl Scorer {
         &self.events
     }
 
+    /// The run is over (e.g. time is up): bank any live combo as if the drift
+    /// ended cleanly.
+    pub fn finish(&mut self) {
+        self.events.clear();
+        self.bank();
+    }
+
     pub fn events(&self) -> &[ScoreEvent] {
         &self.events
     }
@@ -228,9 +235,14 @@ impl Scorer {
             match zone.kind {
                 ZoneKind::Outer => {
                     let inside = track.in_range(world.place.distance, zone.start, zone.end);
-                    let gap = rear_gap_to_edge(world, &track, zone.side);
                     let line = &self.params.line;
-                    let closeness = proximity(gap, line.outer_full_within, line.outer_zero_beyond);
+                    // Only measure where it can count (it's a few projections).
+                    let closeness = if inside && scoring {
+                        let gap = rear_gap_to_edge(world, &track, zone.side);
+                        proximity(gap, line.outer_full_within, line.outer_zero_beyond)
+                    } else {
+                        0.0
+                    };
                     let state = &mut self.outers[i];
                     if !inside {
                         state.entered = false;
@@ -251,9 +263,9 @@ impl Scorer {
                     let line = &self.params.line;
                     let delta = track.delta(zone.start, world.place.distance);
                     let in_window = (-line.clip_window_before..=line.clip_window_after).contains(&delta);
-                    let distance = front_distance_to(world, zone.point);
                     let state = &mut self.clips[i];
                     if in_window && scoring {
+                        let distance = front_distance_to(world, zone.point);
                         state.best = Some(state.best.map_or(distance, |b: f64| b.min(distance)));
                     }
                     let left_window = state.in_window && !in_window;

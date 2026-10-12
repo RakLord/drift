@@ -4,6 +4,7 @@
 
 pub mod config;
 pub mod math;
+pub mod paths;
 pub mod rng;
 
 pub use math::Vec2;

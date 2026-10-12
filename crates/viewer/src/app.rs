@@ -12,16 +12,20 @@ pub struct Options {
     pub screenshot: Option<(PathBuf, u32)>,
     /// Dev tool: a scripted driver laps the track.
     pub autopilot: bool,
+    /// Dev tool: a scripted driver does a throttle-only doughnut.
+    pub donut: bool,
     /// Start on the generated track for this seed instead of the library track.
     pub seed: Option<u64>,
     /// Start in map view.
     pub map_view: bool,
     /// Start with the generator panel open.
     pub generator: bool,
+    /// A trained genome drives instead of you.
+    pub genome: Option<PathBuf>,
 }
 
 impl Options {
-    /// `[--seed N] [--map] [--generator] [--screenshot <path> [--frames N]] [--autopilot]`
+    /// `[--seed N] [--map] [--generator] [--genome path] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
     pub fn from_args() -> Self {
         let mut options = Self::default();
         let mut frames = 240;
@@ -32,9 +36,11 @@ impl Options {
                 "--screenshot" => path = args.next().map(PathBuf::from),
                 "--frames" => frames = args.next().and_then(|n| n.parse().ok()).unwrap_or(frames),
                 "--autopilot" => options.autopilot = true,
+                "--donut" => options.donut = true,
                 "--seed" => options.seed = args.next().and_then(|n| n.parse().ok()),
                 "--map" => options.map_view = true,
                 "--generator" => options.generator = true,
+                "--genome" => options.genome = args.next().map(PathBuf::from),
                 other => eprintln!("ignoring unknown argument {other}"),
             }
         }

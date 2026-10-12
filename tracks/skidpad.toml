@@ -1,0 +1,27 @@
+# Skidpad: a very wide ring of open tarmac for doughnut and steady-state tests.
+# Used by the viewer's --donut dev mode. Counter-clockwise, ~440 m.
+
+version = 1
+name = "Skidpad"
+width = 70.0
+verge = 8.0
+
+[[anchors]]
+pos = [0.0, -70.0]
+left = "soft"
+right = "soft"
+
+[[anchors]]
+pos = [70.0, 0.0]
+left = "soft"
+right = "soft"
+
+[[anchors]]
+pos = [0.0, 70.0]
+left = "soft"
+right = "soft"
+
+[[anchors]]
+pos = [-70.0, 0.0]
+left = "soft"
+right = "soft"

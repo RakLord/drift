@@ -1,0 +1,15 @@
+[package]
+name = "evo"
+description = "Genetic algorithm: islands, selection, neuron-level crossover, mutation, curriculum fitness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+common.workspace = true
+nn.workspace = true
+sim.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

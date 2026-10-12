@@ -10,11 +10,15 @@ license = "MIT"
 [workspace.dependencies]
 common = { path = "crates/common" }
 sim = { path = "crates/sim" }
+nn = { path = "crates/nn" }
+agent = { path = "crates/agent" }
+evo = { path = "crates/evo" }
 
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 macroquad = { version = "0.4", default-features = false }
 gilrs = "0.11"
+rayon = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -1,0 +1,102 @@
+# Training run settings. The trainer copies this (and the car, scoring and
+# generator configs) into runs/<name>/config/ when a run starts.
+
+seed = 1
+generations = 500
+
+[ga]
+population = 100          # genomes per island
+elite_fraction = 0.05
+tournament_size = 4
+crossover_rate = 0.7      # neuron-level crossover
+mutation_rate = 0.05      # chance each parameter is nudged
+sigma_start = 0.1         # mutation step size: start, limits, adaptation speed
+sigma_min = 0.005
+sigma_max = 0.5
+sigma_adapt = 0.15
+reset_rate = 0.002        # chance a parameter is re-drawn from scratch
+immigrants = 2            # fresh random genomes per island per generation
+migration_every = 25      # weakest island may be replaced by the strongest...
+migration_gap = 0.8       # ...if its best is below this share of the strongest's
+
+# Starting priors for fresh networks. Neutral by default: new networks start
+# out erratic and evolution has to find everything itself. A "calm start"
+# alternative: output_bias = [0.0, 0.85, -3.0, -3.0, -3.0] (straight, ~70%
+# throttle, brake/handbrake/clutch off) with output_init_scale = 0.25.
+# Outputs: steer, throttle, brake, handbrake, clutch.
+[network]
+output_bias = [0.0, 0.0, 0.0, 0.0, 0.0]
+output_init_scale = 1.0
+
+# One island per network shape. Output heads are fixed (steer + 4 pedals).
+[[islands]]
+hidden = [{ size = 32, activation = "tanh" }, { size = 32, activation = "tanh" }]
+
+[[islands]]
+hidden = [{ size = 48, activation = "tanh" }]
+
+[[islands]]
+hidden = [{ size = 24, activation = "leaky_relu" }, { size = 24, activation = "leaky_relu" }]
+
+[[islands]]
+hidden = [{ size = 64, activation = "tanh" }, { size = 32, activation = "tanh" }]
+
+[episode]
+max_secs = 60.0
+start_speed_kmh = 50.0    # rolling start, Formula Drift style
+decision_every = 4        # network decides at 30 Hz, controls held in between
+sensor_noise = 0.02
+no_progress_secs = 4.0
+max_backwards = 20.0
+max_hard_hits = 3
+end_on_spin = true
+
+[tracks]
+per_generation = 3        # fresh generated tracks every generation (config/generator.toml)
+test_every = 10           # best genome vs the library tracks (tracks/*.toml) every N gens; 0 = never
+
+[checkpoints]
+every = 10                # full population saved every N generations
+
+# Curriculum: fitness = progress * metres + line/angle/style weights * judged
+# points - penalty * penalty points. Moves on when the generation's best
+# genome averages `at_least` of `metric` for `generations` in a row.
+# Keep penalty weights small: spins and crashes already end the run, and big
+# penalties teach the cars that stopping is safest.
+
+# Stage 1 rewards distance only. Crashing already costs the run (3 hard hits
+# end it); penalising crashes on top teaches "brake to a stop" instead.
+[[curriculum]]
+name = "drive"
+progress = 1.0
+line = 0.0
+angle = 0.0
+style = 0.0
+penalty = 0.0
+advance = { metric = "progress", at_least = 900.0, generations = 10 }
+
+[[curriculum]]
+name = "angle"
+progress = 0.4
+line = 0.0
+angle = 1.0
+style = 0.0
+penalty = 0.1
+advance = { metric = "angle", at_least = 400.0, generations = 5 }
+
+[[curriculum]]
+name = "line"
+progress = 0.2
+line = 1.0
+angle = 1.0
+style = 0.0
+penalty = 0.25
+advance = { metric = "line", at_least = 400.0, generations = 5 }
+
+[[curriculum]]
+name = "style"
+progress = 0.1
+line = 1.0
+angle = 1.0
+style = 1.0
+penalty = 0.5
