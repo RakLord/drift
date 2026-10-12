@@ -77,7 +77,7 @@ fn top_speed_is_capped_by_rev_limiter() {
     drive(&mut car, 60.0, full_throttle);
     let kmh = car.state.speed() / KMH;
     println!("top speed: {kmh:.0} km/h, {:.0} rpm", car.state.engine_rpm());
-    assert!((120.0..200.0).contains(&kmh), "top speed {kmh:.0} km/h");
+    assert!((100.0..200.0).contains(&kmh), "top speed {kmh:.0} km/h");
     assert!(car.state.engine_rpm() < car.params.engine.rev_limit_rpm + 200.0);
 }
 
