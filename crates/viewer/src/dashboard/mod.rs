@@ -3,7 +3,7 @@
 //! generation's values; dashed lines mark curriculum stage changes. A meter
 //! under the title shows the saved driver against the current stage's gate.
 
-mod chart;
+pub mod chart;
 mod gate;
 mod metrics;
 
@@ -105,7 +105,7 @@ impl Dashboard {
                 range: None,
             },
             Chart {
-                title: "Drift quality (1 = 45° held all run)",
+                title: "Drift quality (flow: 1 = full-angle drift, sides held, all run)",
                 unit: "",
                 series: vec![line("top drifter", &top_q), line("fittest", &best_q), line("population", &mean_q)],
                 kind: Kind::Lines,

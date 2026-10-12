@@ -39,7 +39,8 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - Done: track pool (`tracks.pool` + `pool_per_generation`): each generation draws a few saved tracks; the `[best]` check runs take pool tracks first. Set in `cargo drift`: when starting a run, or on resume ("Change its tracks?", saved into the run's config).
 - Done: track screen (`O` / `--tracks`, see *Tracks › Track manager*): map cards, stats, fixed/pool/off roles for the defaults or a run, launcher "Pick in the viewer".
 - Done: `runs/<run>/tracks.csv` and the "this generation" strip on the track screen.
-- Next: Generate tab, then Results tab (see *Tracks › Track manager*).
+- Done: Results tab (`Tab` on the track screen, with a run picked): per-track results over the last N generations, worst first, and the worst generated tracks to keep.
+- Next: Generate tab (see *Tracks › Track manager*).
 - Then: M3's features are in; what's left is user-led training to get cars drifting through drive -> slide -> judged (and, once judged works, polishing).
 
 **In progress: M4** (network view and run dashboard already done)
@@ -160,7 +161,7 @@ Good driving and drift physics is what gives this project value. The GA will als
 - **Track library:** about 15 approved tracks, saved to disk. A good generated track can be approved into the library (`K`). Library tracks are never trained on; those with `test` on (the default) form the **test set** the trainer measures generalisation on.
 - **Bezier editor:** later, not v1.
 
-### Track manager (in progress: Library tab and this-generation strip done)
+### Track manager (in progress: Library and Results tabs and the this-generation strip done)
 
 Why: run6 sat at ~730 m for 280 gens with the gate value swinging ±80 m, mostly from which random generated tracks it drew (full-time runs ranged 387–1195 m). 9 of the saved driver's 10 runs per generation were fresh generated tracks nobody chose, and picking saved tracks in the launcher is a bare name list.
 
@@ -171,7 +172,9 @@ Why: run6 sat at ~730 m for 280 gens with the gate value swinging ±80 m, mostly
 - **Tabs:**
   - **Library:** every `tracks/*.toml`. Drive, rename, delete, toggle test, set its role in the training set being edited.
   - **Generate:** a batch of generated tracks from `config/generator.toml`; reroll, filter by length/corners, keep the good ones into the library.
-  - **Results:** a run's per-track results (below); its worst generated tracks can be kept into the library from here.
+  - **Results** (`Tab`, only with a run picked): a run's per-track results from `tracks.csv` over a `LAST N GENS` window (10 / 20 / 50 / 100 / all, default 20; whole-run means are dragged down by early generations).
+    - Library tracks, worst first by mean laps: runs, mean laps and metres, early-end share, most common end, a line per role, and a laps-per-generation chart over the whole run. Fixed / pool / off and drive work as on the Library tab.
+    - Worst generated: generated tracks are driven once each, so these are the 24 generated runs in the window with the fewest laps, which can be kept into the library. They're built a few per frame, since generating takes tens of ms each.
 - **Training set being edited**, picked at the top: *Defaults* (`config/training.toml`, for new runs) or a run (`runs/<run>/config/training.toml`, takes effect on `--resume`; warns if its trainer is running). Edits change only the `[tracks]` lines.
 - **Roles** a library track can have in a training set:
   - **fixed:** driven every generation (as now).
@@ -184,7 +187,7 @@ Why: run6 sat at ~730 m for 280 gens with the gate value swinging ±80 m, mostly
   - Generated tracks kept from Results are rebuilt from seed + the run's snapshot `generator.toml`; the trainer doesn't save every generated track.
   - A track can't be both fixed and pool (the trainer refuses).
 - **This generation:** with a run picked, a strip shows every track its saved driver drove in the newest generation of `tracks.csv` (generated ones rebuilt from seed), each with its laps and end. Generated ones can be kept.
-- **Build order:** pool mode (done) → screen with Library tab + training-set editing → `tracks.csv` + this-generation strip → Generate tab → Results tab. The screen came first because not seeing the training tracks was the pain point.
+- **Build order:** pool mode (done) → screen with Library tab + training-set editing → `tracks.csv` + this-generation strip → Results tab (done) → Generate tab. The screen came first because not seeing the training tracks was the pain point.
 
 ## Scoring
 

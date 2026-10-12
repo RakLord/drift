@@ -200,6 +200,16 @@ impl Panel {
         changed
     }
 
+    /// Room for custom drawing, the panel's inner width by `height`; `None`
+    /// if its section is closed or it's scrolled out of view.
+    pub fn area(&mut self, height: f32) -> Option<Rect> {
+        if !self.section_open {
+            return None;
+        }
+        let top = self.row(height + GAP)?;
+        Some(Rect::new(self.x + PAD, top, self.width - 2.0 * PAD, height))
+    }
+
     /// Whole-number slider.
     pub fn int_slider(&mut self, label: &str, value: &mut u32, range: std::ops::RangeInclusive<u32>) -> bool {
         let mut v = f64::from(*value);

@@ -3,22 +3,27 @@
 //! training set at the top: the defaults for new runs, a run's own config
 //! (used when it resumes), or the launcher's pick (`--set`). With a run
 //! picked, a strip above the library shows every track its saved driver
-//! drove in its newest generation, generated ones included.
+//! drove in its newest generation, generated ones included, and the Results
+//! tab (`Tab`) shows how it did on each track over its last N generations.
 
 mod generation;
+mod results;
+mod run_log;
 mod training_set;
 
 use std::path::PathBuf;
 
 use macroquad::prelude::*;
-use sim::track::{Track, TrackStats};
+use sim::track::TrackStats;
 
 use super::Switch;
 use super::library::{self, Entry};
+use crate::dashboard::chart::{Chart, Kind, Series};
 use crate::render::thumb::{Thumb, ThumbStyle};
 use crate::render::{text, theme};
 use crate::ui::{self, ButtonStyle, Panel};
 use generation::{Drawn, LastGeneration};
+use results::{RunResults, TrackResult};
 pub use training_set::Source;
 use training_set::{Role, TrainingSet};
 
@@ -38,6 +43,8 @@ const SECTION_H: f32 = 30.0;
 const SCROLL_STEP: f32 = 60.0;
 /// How often to check whether the run being edited is training, seconds.
 const TRAINING_CHECK: f64 = 2.0;
+/// The laps-per-generation chart in the Results detail pane.
+const SPARK_H: f32 = 150.0;
 
 struct Card {
     entry: Entry,
@@ -51,12 +58,49 @@ impl Card {
         let stats = entry.track.as_ref().ok().map(|t| TrackStats::of(t));
         Self { entry, thumb, stats }
     }
+
+    fn face(&self, role: Role) -> CardFace<'_> {
+        let e = &self.entry;
+        CardFace {
+            name: e.name.clone(),
+            detail: match &self.stats {
+                Some(s) => format!("{:.2} km  ·  {} corners  ·  {}", s.length / 1000.0, s.corners, e.file_name()),
+                None => e.file_name(),
+            },
+            thumb: self.thumb.as_ref(),
+            role,
+            test: e.test,
+        }
+    }
+}
+
+/// What a full-size card shows.
+struct CardFace<'a> {
+    name: String,
+    /// The line under the name.
+    detail: String,
+    thumb: Option<&'a Thumb>,
+    role: Role,
+    test: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Library,
+    /// A run's per-track results; only with a run's training set picked.
+    Results,
 }
 
 enum Action {
     Select(usize),
     /// A track in the "this generation" strip.
     SelectDrawn(usize),
+    /// A library track on the Results tab.
+    SelectResult(usize),
+    /// A worst generated track on the Results tab.
+    SelectWorst(usize),
+    SwitchTab,
+    Window(i32),
     /// Save the selected generated track into the library.
     Keep,
     Drive,
@@ -72,6 +116,7 @@ enum Action {
 pub struct TracksScreen {
     /// Showing just the launcher's pick: Esc closes the viewer.
     pub locked: bool,
+    tab: Tab,
     cards: Vec<Card>,
     selected: usize,
     /// The run's newest generation (with a run's training set picked).
@@ -80,6 +125,11 @@ pub struct TracksScreen {
     drawn_selected: Option<usize>,
     /// Where the library grid starts in the scrolled content (below the strip).
     library_top: f32,
+    /// The run's results, loaded when the Results tab first opens.
+    results: Option<RunResults>,
+    /// A worst generated track on the Results tab is selected instead of
+    /// `selected`.
+    worst_selected: Option<usize>,
     /// Training sets to pick from (just the one with `--set`).
     sources: Vec<Source>,
     set: Result<TrainingSet, String>,
@@ -109,11 +159,14 @@ impl TracksScreen {
         }
         let mut screen = Self {
             locked,
+            tab: Tab::Library,
             cards: vec![],
             selected: 0,
             last: source.run().map(LastGeneration::new),
             drawn_selected: None,
             library_top: 0.0,
+            results: None,
+            worst_selected: None,
             sources,
             set: TrainingSet::load(source),
             training: false,
@@ -170,14 +223,23 @@ impl TracksScreen {
             // New generation, new tracks.
             self.drawn_selected = None;
         }
+        if self.tab == Tab::Results
+            && let Some(results) = &mut self.results
+            && results.poll(dt)
+        {
+            self.worst_selected = None;
+        }
         if self.renaming.is_none() {
             self.handle_keys();
         }
     }
 
     fn handle_keys(&mut self) {
+        if is_key_pressed(KeyCode::Tab) {
+            self.apply(Action::SwitchTab);
+        }
         let n = self.cards.len();
-        if n > 0 {
+        if n > 0 && self.tab == Tab::Library {
             let cols = self.cols.max(1);
             let moved = if is_key_pressed(KeyCode::Right) {
                 Some((self.selected + 1).min(n - 1))
@@ -196,7 +258,7 @@ impl TracksScreen {
             }
         }
         let role = self.selected_role();
-        let action = if self.drawn_selected.is_some() {
+        let action = if self.selected_generated().is_some() {
             // A generated track: all it can do is be kept (K).
             is_key_pressed(KeyCode::K).then_some(Action::Keep)
         } else if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
@@ -205,7 +267,7 @@ impl TracksScreen {
             Some(Action::SetRole(if role == Some(Role::Fixed) { Role::Off } else { Role::Fixed }))
         } else if is_key_pressed(KeyCode::P) {
             Some(Action::SetRole(if role == Some(Role::Pool) { Role::Off } else { Role::Pool }))
-        } else if is_key_pressed(KeyCode::T) {
+        } else if is_key_pressed(KeyCode::T) && self.tab == Tab::Library {
             Some(Action::ToggleTest)
         } else if is_key_pressed(KeyCode::LeftBracket) {
             Some(Action::CycleSet(-1))
@@ -245,6 +307,47 @@ impl TracksScreen {
                 self.drawn_selected = None;
                 Ok(None)
             }
+            Action::SelectResult(i) => {
+                let id = self.results.as_ref().and_then(|r| r.library.get(i)).map(|t| t.summary.id.clone());
+                match id.and_then(|id| self.cards.iter().position(|c| c.entry.config_path() == id)) {
+                    Some(card) => {
+                        (self.selected, self.worst_selected) = (card, None);
+                        Ok(None)
+                    }
+                    None => Err("that track isn't in the library any more".into()),
+                }
+            }
+            Action::SelectWorst(i) => {
+                self.worst_selected = Some(i);
+                Ok(None)
+            }
+            Action::SwitchTab => match self.tab {
+                Tab::Results => {
+                    self.tab = Tab::Library;
+                    self.scroll = 0.0;
+                    Ok(None)
+                }
+                Tab::Library => match self.set.as_ref().ok().and_then(|s| s.source.run()) {
+                    Some(run) => {
+                        if self.results.as_ref().is_none_or(|r| r.run != run) {
+                            self.results = Some(RunResults::new(run));
+                            self.worst_selected = None;
+                        }
+                        self.tab = Tab::Results;
+                        self.scroll = 0.0;
+                        Ok(None)
+                    }
+                    None => Err("results are per run: pick a run's training set ([ ])".into()),
+                },
+            },
+            Action::Window(step) => {
+                if let Some(results) = &mut self.results
+                    && results.step_window(step)
+                {
+                    self.worst_selected = None;
+                }
+                Ok(None)
+            }
             Action::SelectDrawn(i) => {
                 self.renaming = None;
                 let id = self.last.as_ref().and_then(|l| l.drawn.get(i)).map(|d| d.id.clone());
@@ -255,14 +358,16 @@ impl TracksScreen {
                 }
                 Ok(None)
             }
-            Action::Keep => match self.selected_drawn() {
+            Action::Keep => match self.selected_generated().and_then(|d| Some((d.seed()?, d.track.as_ref().ok()?))) {
                 Some((seed, track)) => {
                     let def = track.def.clone();
                     library::keep(&def, seed).map(|path| {
                         self.rescan();
                         if let Some(i) = self.cards.iter().position(|c| library::same_file(&c.entry.path, &path)) {
-                            (self.selected, self.drawn_selected) = (i, None);
-                            self.scroll_to_selected();
+                            (self.selected, self.drawn_selected, self.worst_selected) = (i, None, None);
+                            if self.tab == Tab::Library {
+                                self.scroll_to_selected();
+                            }
                         }
                         Some(format!("kept as {}", path.file_name().unwrap_or_default().to_string_lossy()))
                     })
@@ -341,6 +446,15 @@ impl TracksScreen {
                 let next = self.sources[(at + step).rem_euclid(n) as usize].clone();
                 self.last = next.run().map(LastGeneration::new);
                 self.drawn_selected = None;
+                self.worst_selected = None;
+                if let Some(run) = next.run() {
+                    if self.tab == Tab::Results {
+                        self.results = Some(RunResults::new(run));
+                    }
+                } else {
+                    self.tab = Tab::Library;
+                }
+                self.scroll = 0.0;
                 self.set = TrainingSet::load(next);
                 self.training_checked = f64::MAX;
                 Ok(None)
@@ -370,8 +484,16 @@ impl TracksScreen {
     pub fn draw(&mut self) {
         clear_background(theme::GROUND);
         let mut actions = vec![];
-        self.draw_grid(&mut actions);
-        self.draw_detail(&mut actions);
+        match self.tab {
+            Tab::Library => {
+                self.draw_grid(&mut actions);
+                self.draw_detail(&mut actions);
+            }
+            Tab::Results => {
+                self.draw_results_grid(&mut actions);
+                self.draw_results_detail(&mut actions);
+            }
+        }
         // Over the grid, so cards scrolled up slide under it.
         self.draw_top_bar(&mut actions);
         self.draw_footer();
@@ -406,7 +528,36 @@ impl TracksScreen {
         }
         x += 60.0;
 
-        if let Ok(set) = &self.set {
+        if !self.locked {
+            let tab_w = (PANE_W - GAP) / 2.0;
+            let tabs = [(Tab::Library, "LIBRARY"), (Tab::Results, "RESULTS")];
+            for (i, (tab, label)) in tabs.into_iter().enumerate() {
+                let r = Rect::new(w - PANE_W - 16.0 + i as f32 * (tab_w + GAP), 14.0, tab_w, 38.0);
+                let style = if self.tab == tab { ButtonStyle::Primary } else { ButtonStyle::Normal };
+                if ui::button(r, label, style) && self.tab != tab {
+                    actions.push(Action::SwitchTab);
+                }
+            }
+        }
+
+        if self.tab == Tab::Results
+            && let Some(results) = &self.results
+        {
+            let window = results.window().map_or("all".to_owned(), |n| n.to_string());
+            if let Some(step) = stepper(x, "LAST N GENS", &window) {
+                actions.push(Action::Window(step));
+            }
+            let line = match (results.first(), results.newest) {
+                (Some(first), Some(newest)) => format!(
+                    "{}   ·   generations {first}–{newest}   ·   {} runs   ·   {} library tracks",
+                    results.run,
+                    results.runs(),
+                    results.library.len()
+                ),
+                _ => format!("{}: nothing in tracks.csv yet", results.run),
+            };
+            text(&line, 16.0, 80.0, 18.0, theme::TEXT_DIM);
+        } else if let Ok(set) = &self.set {
             let pool = format!("{} of {}", set.pool_draw(), set.pool.len());
             if let Some(step) = stepper(x, "POOL TRACKS / GEN", &pool) {
                 actions.push(Action::Pooled(step));
@@ -438,19 +589,32 @@ impl TracksScreen {
         Rect::new(16.0, TOP, screen_width() - PANE_W - 48.0, screen_height() - TOP - 30.0)
     }
 
-    /// The generated track selected in the strip, with its seed.
-    fn selected_drawn(&self) -> Option<(u64, &Track)> {
-        let drawn = self.last.as_ref()?.drawn.get(self.drawn_selected?)?;
-        Some((drawn.seed()?, drawn.track.as_ref().ok()?))
+    /// The generated track selected on this tab: in the strip, or among the
+    /// worst generated.
+    fn selected_generated(&self) -> Option<&Drawn> {
+        match self.tab {
+            Tab::Library => self.last.as_ref()?.drawn.get(self.drawn_selected?),
+            Tab::Results => self.results.as_ref()?.worst.get(self.worst_selected?),
+        }
+    }
+
+    /// Wheel-scroll the grid over `content` pixels of content. Returns
+    /// whether the mouse is over it.
+    fn scroll_grid(&mut self, area: Rect, content: f32) -> bool {
+        let over = area.contains(mouse_position().into());
+        if over && self.renaming.is_none() {
+            let (_, wheel) = mouse_wheel();
+            self.scroll -= wheel.signum() * SCROLL_STEP * f32::from(wheel != 0.0);
+        }
+        self.scroll = self.scroll.clamp(0.0, (content - area.h).max(0.0));
+        over
     }
 
     fn draw_grid(&mut self, actions: &mut Vec<Action>) {
         let area = self.grid_rect();
-        let cols = (((area.w + GAP) / (CARD_W + GAP)).floor() as usize).max(1);
+        let (cols, card_w) = columns(area.w, CARD_W);
         self.cols = cols;
-        let card_w = (area.w - GAP * (cols as f32 - 1.0)) / cols as f32;
-        let small_cols = (((area.w + GAP) / (SMALL_W + GAP)).floor() as usize).max(1);
-        let small_w = (area.w - GAP * (small_cols as f32 - 1.0)) / small_cols as f32;
+        let (small_cols, small_w) = columns(area.w, SMALL_W);
         let drawn = self.last.as_ref().map_or(0, |l| l.drawn.len());
         // The strip (if any), then the library.
         self.library_top =
@@ -458,13 +622,8 @@ impl TracksScreen {
         let rows = self.cards.len().div_ceil(cols);
         let content = self.library_top + rows as f32 * (CARD_H + GAP) - GAP;
 
+        let over = self.scroll_grid(area, content);
         let (mx, my) = mouse_position();
-        let over = area.contains(vec2(mx, my));
-        if over && self.renaming.is_none() {
-            let (_, wheel) = mouse_wheel();
-            self.scroll -= wheel.signum() * SCROLL_STEP * f32::from(wheel != 0.0);
-        }
-        self.scroll = self.scroll.clamp(0.0, (content - area.h).max(0.0));
         let visible = |y: f32, h: f32| y + h >= area.y - GAP && y <= area.y + area.h;
         let clicked = |r: Rect| over && r.contains(vec2(mx, my)) && is_mouse_button_pressed(MouseButton::Left);
 
@@ -490,7 +649,8 @@ impl TracksScreen {
                     Some(s) => s == i,
                     None => self.cards.get(self.selected).is_some_and(|c| c.entry.config_path() == d.id),
                 };
-                draw_drawn_card(d, r, selected, over && r.contains(vec2(mx, my)));
+                let result = format!("{:.2} laps  ·  {}", d.laps, d.end);
+                draw_drawn_card(d, &result, r, selected, over && r.contains(vec2(mx, my)));
             }
             text("LIBRARY", area.x, area.y - self.scroll + self.library_top - 10.0, 20.0, theme::SODIUM);
         }
@@ -508,7 +668,77 @@ impl TracksScreen {
                 actions.push(Action::Select(i));
             }
             let role = set.map_or(Role::Off, |s| s.role(&card.entry.config_path()));
-            draw_card(card, r, role, i == self.selected && self.drawn_selected.is_none(), hot);
+            draw_card(&card.face(role), r, i == self.selected && self.drawn_selected.is_none(), hot);
+        }
+    }
+
+    /// Results: library tracks worst first, then the worst generated tracks.
+    fn draw_results_grid(&mut self, actions: &mut Vec<Action>) {
+        let area = self.grid_rect();
+        let (cols, card_w) = columns(area.w, CARD_W);
+        let (small_cols, small_w) = columns(area.w, SMALL_W);
+        let Some((library, worst)) = self.results.as_ref().map(|r| (r.library.len(), r.worst.len())) else { return };
+        let worst_top = SECTION_H + library.max(1).div_ceil(cols) as f32 * (CARD_H + GAP) + GAP;
+        let content = worst_top + SECTION_H + worst.div_ceil(small_cols) as f32 * (SMALL_H + GAP);
+        let over = self.scroll_grid(area, content);
+        let Some(results) = &self.results else { return };
+        let top = area.y - self.scroll;
+        if results.newest.is_none() {
+            let why = format!("no results yet: {} hasn't logged a generation to tracks.csv", results.run);
+            text(&why, area.x, top + 20.0, 20.0, theme::TEXT_DIM);
+            return;
+        }
+
+        let (mx, my) = mouse_position();
+        let visible = |y: f32, h: f32| y + h >= area.y - GAP && y <= area.y + area.h;
+        let window = window_label(results.window()).to_uppercase();
+        text(&format!("LIBRARY TRACKS  ·  WORST FIRST  ·  {window}"), area.x, top + 20.0, 20.0, theme::SODIUM);
+        if results.library.is_empty() {
+            text("no library tracks driven in this window", area.x, top + SECTION_H + 24.0, 18.0, theme::TEXT_DIM);
+        }
+        let set = self.set.as_ref().ok();
+        let selected_id = self.cards.get(self.selected).filter(|_| self.worst_selected.is_none()).map(|c| c.entry.config_path());
+        for (i, t) in results.library.iter().enumerate() {
+            let x = area.x + (i % cols) as f32 * (card_w + GAP);
+            let y = top + SECTION_H + (i / cols) as f32 * (CARD_H + GAP);
+            if !visible(y, CARD_H) {
+                continue;
+            }
+            let r = Rect::new(x, y, card_w, CARD_H);
+            let hot = over && r.contains(vec2(mx, my));
+            if hot && is_mouse_button_pressed(MouseButton::Left) {
+                actions.push(Action::SelectResult(i));
+            }
+            let s = &t.summary;
+            let face = CardFace {
+                name: t.name(),
+                detail: format!("{:.2} laps  ·  {:.0}% early  ·  {}", s.laps, s.early * 100.0, s.common_end),
+                thumb: t.thumb.as_ref(),
+                role: set.map_or(Role::Off, |set| set.role(&s.id)),
+                test: self.cards.iter().any(|c| c.entry.test && c.entry.config_path() == s.id),
+            };
+            draw_card(&face, r, selected_id.as_deref() == Some(s.id.as_str()), hot);
+        }
+
+        let y = top + worst_top;
+        let building = match results.building() {
+            0 => String::new(),
+            n => format!("  ·  BUILDING {n} MORE"),
+        };
+        text(&format!("WORST GENERATED  ·  FEWEST LAPS  ·  {window}{building}"), area.x, y + 20.0, 20.0, theme::SODIUM);
+        for (i, d) in results.worst.iter().enumerate() {
+            let x = area.x + (i % small_cols) as f32 * (small_w + GAP);
+            let y = y + SECTION_H + (i / small_cols) as f32 * (SMALL_H + GAP);
+            if !visible(y, SMALL_H) {
+                continue;
+            }
+            let r = Rect::new(x, y, small_w, SMALL_H);
+            let hot = over && r.contains(vec2(mx, my));
+            if hot && is_mouse_button_pressed(MouseButton::Left) {
+                actions.push(Action::SelectWorst(i));
+            }
+            let result = format!("g{}  ·  {:.2} laps  ·  {}", d.generation, d.laps, d.end);
+            draw_drawn_card(d, &result, r, self.worst_selected == Some(i), hot);
         }
     }
 
@@ -518,16 +748,7 @@ impl TracksScreen {
         let ui = &mut self.panel;
         (ui.x, ui.y) = (x, TOP + map.h + GAP);
         if let Some(d) = self.drawn_selected.and_then(|i| self.last.as_ref()?.drawn.get(i)) {
-            draw_pane_map(map, d.thumb.as_ref());
-            ui.begin(&d.name().to_uppercase(), screen_height() - 30.0);
-            stats_labels(ui, d.stats.as_ref(), d.track.as_ref().err());
-            ui.heading("This generation");
-            ui.label(&run_line(d), theme::TEXT);
-            ui.label("a fresh generated track: keep it to drive it", theme::TEXT_DIM);
-            if ui.buttons(&[("keep in library (K)", ButtonStyle::Primary)]).is_some() {
-                actions.push(Action::Keep);
-            }
-            ui.end();
+            generated_pane(ui, map, d, "This generation", actions);
             return;
         }
         let Some(card) = self.cards.get(self.selected) else {
@@ -550,22 +771,7 @@ impl TracksScreen {
         }
 
         if let Ok(set) = &self.set {
-            ui.heading("Training");
-            let role = set.role(&config_path);
-            let style = |r: Role| if role == r { ButtonStyle::Primary } else { ButtonStyle::Normal };
-            match ui.buttons(&[("fixed (F)", style(Role::Fixed)), ("pool (P)", style(Role::Pool)), ("off", style(Role::Off))]) {
-                Some(0) => actions.push(Action::SetRole(Role::Fixed)),
-                Some(1) => actions.push(Action::SetRole(Role::Pool)),
-                Some(2) => actions.push(Action::SetRole(Role::Off)),
-                _ => {}
-            }
-            let about = match role {
-                Role::Fixed => "driven every generation".to_owned(),
-                Role::Pool => format!("one of {}; {} drawn each generation", set.pool.len(), set.pool_draw()),
-                Role::Off if e.test => "not trained on: in the test set".to_owned(),
-                Role::Off => "not trained on".to_owned(),
-            };
-            ui.label(&about, theme::TEXT_DIM);
+            training_section(ui, set, &config_path, e.test, actions);
         }
 
         ui.heading("Track");
@@ -597,12 +803,72 @@ impl TracksScreen {
         ui.end();
     }
 
+    /// Results pane: a worst generated track, or the selected library
+    /// track's results.
+    fn draw_results_detail(&mut self, actions: &mut Vec<Action>) {
+        let x = screen_width() - PANE_W - 16.0;
+        let map = Rect::new(x, TOP, PANE_W, pane_map_h());
+        let ui = &mut self.panel;
+        (ui.x, ui.y) = (x, TOP + map.h + GAP);
+        let results = self.results.as_ref();
+        if let Some(d) = self.worst_selected.and_then(|i| results?.worst.get(i)) {
+            generated_pane(ui, map, d, &format!("Generation {}", d.generation), actions);
+            return;
+        }
+        let Some(card) = self.cards.get(self.selected) else {
+            draw_pane_map(map, None);
+            text("no tracks in tracks/", x + 16.0, TOP + 40.0, 20.0, theme::TEXT_DIM);
+            return;
+        };
+        draw_pane_map(map, card.thumb.as_ref());
+
+        let e = &card.entry;
+        let config_path = e.config_path();
+        ui.begin(&e.name.to_uppercase(), screen_height() - 30.0);
+        stats_labels(ui, card.stats.as_ref(), e.track.as_ref().err());
+        ui.heading(&window_label(results.and_then(|r| r.window())));
+        match results.and_then(|r| r.library.iter().find(|t| t.summary.id == config_path)) {
+            Some(TrackResult { summary: s, .. }) => {
+                ui.label(&format!("{} runs: {:.2} laps on average ({:.0} m)", s.runs, s.laps, s.progress), theme::TEXT);
+                ui.label(&format!("{:.0}% ended early   ·   most often: {}", s.early * 100.0, s.common_end), theme::TEXT);
+                for (role, runs, laps) in &s.by_role {
+                    ui.label(&format!("{role}: {runs} runs, {laps:.2} laps"), theme::TEXT_DIM);
+                }
+                if let Some(area) = ui.area(SPARK_H) {
+                    let generations: Vec<f64> = (0..s.laps_by_gen.len()).map(|g| g as f64).collect();
+                    let chart = Chart {
+                        title: "Laps per generation",
+                        unit: "",
+                        series: vec![Series { name: "laps", values: &s.laps_by_gen, dots: true }],
+                        kind: Kind::Lines,
+                        range: None,
+                    };
+                    chart.draw(area, &[], None, &generations);
+                }
+            }
+            None => ui.label("not driven in this window", theme::TEXT_DIM),
+        }
+        if let Ok(set) = &self.set {
+            training_section(ui, set, &config_path, e.test, actions);
+        }
+        ui.heading("Track");
+        if ui.buttons(&[("drive (Enter)", ButtonStyle::Primary)]).is_some() {
+            actions.push(Action::Drive);
+        }
+        ui.end();
+    }
+
     fn draw_footer(&self) {
         let h = screen_height();
         // Over the grid, so cards scrolled down slide under it.
         draw_rectangle(0.0, h - 28.0, screen_width(), 28.0, theme::GROUND);
-        let help = "click / arrows select   Enter drive   F fixed   P pool   T test set   [ ] training set   wheel scroll   Esc back";
-        let help = if self.locked { help.replace("   [ ] training set", "").replace("Esc back", "Esc done") } else { help.to_owned() };
+        let help = match self.tab {
+            Tab::Library => {
+                "click / arrows select   Enter drive   F fixed   P pool   T test set   K keep   Tab results   [ ] training set   wheel scroll   Esc back"
+            }
+            Tab::Results => "click select   Enter drive   F fixed   P pool   K keep   Tab library   [ ] training set   wheel scroll   Esc back",
+        };
+        let help = if self.locked { help.replace("   [ ] training set", "").replace("   Tab results", "").replace("Esc back", "Esc done") } else { help.to_owned() };
         text(&help, 16.0, h - 10.0, 16.0, theme::TEXT_DIM);
         if let Some((message, _)) = &self.toast {
             let width = measure_text(message, None, 22, 1.0).width;
@@ -636,6 +902,51 @@ fn stats_labels(ui: &mut Panel, stats: Option<&TrackStats>, error: Option<&Strin
     }
 }
 
+/// The detail pane for a generated track: what it did, and keep.
+fn generated_pane(ui: &mut Panel, map: Rect, d: &Drawn, heading: &str, actions: &mut Vec<Action>) {
+    draw_pane_map(map, d.thumb.as_ref());
+    ui.begin(&d.name().to_uppercase(), screen_height() - 30.0);
+    stats_labels(ui, d.stats.as_ref(), d.track.as_ref().err());
+    ui.heading(heading);
+    ui.label(&run_line(d), theme::TEXT);
+    ui.label("a fresh generated track: keep it to drive it", theme::TEXT_DIM);
+    if ui.buttons(&[("keep in library (K)", ButtonStyle::Primary)]).is_some() {
+        actions.push(Action::Keep);
+    }
+    ui.end();
+}
+
+/// The selected library track's role in the training set.
+fn training_section(ui: &mut Panel, set: &TrainingSet, config_path: &str, test: bool, actions: &mut Vec<Action>) {
+    ui.heading("Training");
+    let role = set.role(config_path);
+    let style = |r: Role| if role == r { ButtonStyle::Primary } else { ButtonStyle::Normal };
+    match ui.buttons(&[("fixed (F)", style(Role::Fixed)), ("pool (P)", style(Role::Pool)), ("off", style(Role::Off))]) {
+        Some(0) => actions.push(Action::SetRole(Role::Fixed)),
+        Some(1) => actions.push(Action::SetRole(Role::Pool)),
+        Some(2) => actions.push(Action::SetRole(Role::Off)),
+        _ => {}
+    }
+    let about = match role {
+        Role::Fixed => "driven every generation".to_owned(),
+        Role::Pool => format!("one of {}; {} drawn each generation", set.pool.len(), set.pool_draw()),
+        Role::Off if test => "not trained on: in the test set".to_owned(),
+        Role::Off => "not trained on".to_owned(),
+    };
+    ui.label(&about, theme::TEXT_DIM);
+}
+
+/// How many `item_w` columns fit in `width`, and their stretched width.
+fn columns(width: f32, item_w: f32) -> (usize, f32) {
+    let cols = (((width + GAP) / (item_w + GAP)).floor() as usize).max(1);
+    (cols, (width - GAP * (cols as f32 - 1.0)) / cols as f32)
+}
+
+/// "Last 20 gens", or "Whole run".
+fn window_label(window: Option<u32>) -> String {
+    window.map_or("Whole run".to_owned(), |n| format!("Last {n} gens"))
+}
+
 /// "pool: 0.12 laps (180 m), crashed".
 fn run_line(d: &Drawn) -> String {
     format!("{}: {:.2} laps ({:.0} m), {}", d.role, d.laps, d.progress, d.end)
@@ -650,8 +961,9 @@ fn role_color(role: &str) -> Color {
     }
 }
 
-/// A small card in the "this generation" strip.
-fn draw_drawn_card(d: &Drawn, r: Rect, selected: bool, hot: bool) {
+/// A small card for a generated (or this generation's) track; `result` is
+/// its line under the name.
+fn draw_drawn_card(d: &Drawn, result: &str, r: Rect, selected: bool, hot: bool) {
     draw_rectangle(r.x, r.y, r.w, r.h, if hot { theme::GRID_MINOR } else { theme::PANEL_SOLID });
     if selected {
         draw_rectangle_lines(r.x, r.y, r.w, r.h, 3.0, theme::NEON_PINK);
@@ -667,8 +979,7 @@ fn draw_drawn_card(d: &Drawn, r: Rect, selected: bool, hot: bool) {
     }
     ui::chip(r.x + 6.0, r.y + 6.0, &d.role.to_uppercase(), role_color(&d.role));
     text(&ui::fit(&d.name(), r.w - 16.0, 16.0), r.x + 8.0, r.y + SMALL_MAP_H + 28.0, 16.0, theme::TEXT);
-    let result = format!("{:.2} laps  ·  {}", d.laps, d.end);
-    text(&ui::fit(&result, r.w - 16.0, 14.0), r.x + 8.0, r.y + SMALL_MAP_H + 44.0, 14.0, theme::TEXT_DIM);
+    text(&ui::fit(result, r.w - 16.0, 14.0), r.x + 8.0, r.y + SMALL_MAP_H + 44.0, 14.0, theme::TEXT_DIM);
 }
 
 /// The detail pane's map: big, but leaving the panel below room.
@@ -692,7 +1003,7 @@ fn stepper(x: f32, label: &str, value: &str) -> Option<i32> {
     }
 }
 
-fn draw_card(card: &Card, r: Rect, role: Role, selected: bool, hot: bool) {
+fn draw_card(face: &CardFace, r: Rect, selected: bool, hot: bool) {
     let fill = if hot { theme::GRID_MINOR } else { theme::PANEL_SOLID };
     draw_rectangle(r.x, r.y, r.w, r.h, fill);
     if selected {
@@ -702,8 +1013,8 @@ fn draw_card(card: &Card, r: Rect, role: Role, selected: bool, hot: bool) {
     }
 
     let map = Rect::new(r.x + 10.0, r.y + 10.0, r.w - 20.0, CARD_MAP_H);
-    let e = &card.entry;
-    match &card.thumb {
+    let role = face.role;
+    match face.thumb {
         Some(thumb) => thumb.draw(map, if role == Role::Off { ThumbStyle::DIM } else { ThumbStyle::CARD }),
         None => {
             text("doesn't build", map.x + 8.0, map.y + 24.0, 18.0, theme::SATURATED);
@@ -717,15 +1028,11 @@ fn draw_card(card: &Card, r: Rect, role: Role, selected: bool, hot: bool) {
         Role::Pool => x += ui::chip(x, y, "POOL", theme::NEON_CYAN) + 4.0,
         Role::Off => {}
     }
-    if e.test && role == Role::Off {
+    if face.test && role == Role::Off {
         ui::chip(x, y, "TEST", theme::SODIUM);
     }
 
     let name_color = if role == Role::Off { theme::TEXT_DIM } else { theme::TEXT };
-    text(&ui::fit(&e.name, r.w - 20.0, 20.0), r.x + 10.0, r.y + CARD_MAP_H + 36.0, 20.0, name_color);
-    let detail = match &card.stats {
-        Some(s) => format!("{:.2} km  ·  {} corners  ·  {}", s.length / 1000.0, s.corners, e.file_name()),
-        None => e.file_name(),
-    };
-    text(&ui::fit(&detail, r.w - 20.0, 15.0), r.x + 10.0, r.y + CARD_MAP_H + 56.0, 15.0, theme::TEXT_DIM);
+    text(&ui::fit(&face.name, r.w - 20.0, 20.0), r.x + 10.0, r.y + CARD_MAP_H + 36.0, 20.0, name_color);
+    text(&ui::fit(&face.detail, r.w - 20.0, 15.0), r.x + 10.0, r.y + CARD_MAP_H + 56.0, 15.0, theme::TEXT_DIM);
 }
