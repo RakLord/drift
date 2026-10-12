@@ -10,6 +10,18 @@ use evo::fitness::drift_quality;
 use sim::episode::{EndReason, EpisodeResult};
 use sim::scoring::Breakdown;
 
+/// The driver saved to best.genome this generation.
+pub struct Saved {
+    pub island: usize,
+    pub genome: usize,
+    /// Its runs this generation, plus any `[best]` check runs.
+    pub runs: Vec<EpisodeResult>,
+    /// Fitness over all of `runs`.
+    pub fitness: f64,
+    /// Where its fitness ranked this generation (0 = the fittest).
+    pub rank: usize,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Report {
     pub generation: u32,
@@ -19,7 +31,12 @@ pub struct Report {
     pub median: f64,
     pub worst: f64,
     pub island_best: Vec<f64>,
-    /// The best genome's mean over its runs.
+    /// The driver saved to best.genome: its fitness over all its runs
+    /// (including any `[best]` check tracks), and where its fitness ranked
+    /// this generation (1 = the fittest).
+    pub saved_fitness: f64,
+    pub saved_rank: usize,
+    /// The saved driver's mean over all its runs.
     pub best_score: Breakdown,
     pub best_progress: f64,
     pub best_laps: f64,
@@ -88,13 +105,13 @@ impl Report {
         stage: &str,
         islands: &[Island],
         results: &[Vec<Vec<EpisodeResult>>],
-        best: (usize, usize),
+        saved: &Saved,
         seconds: f64,
     ) -> Self {
         let mut fitness: Vec<f64> = islands.iter().flat_map(|i| i.fitness.iter().copied()).collect();
         fitness.sort_by(f64::total_cmp);
         let all: Vec<&EpisodeResult> = results.iter().flatten().flatten().collect();
-        let best_runs: Vec<&EpisodeResult> = results[best.0][best.1].iter().collect();
+        let best_runs: Vec<&EpisodeResult> = saved.runs.iter().collect();
         let ticks: u64 = all.iter().map(|r| r.stats.ticks).sum();
         let drifting: Vec<&&EpisodeResult> = all.iter().filter(|r| r.stats.drift_time > 0.0).collect();
 
@@ -127,6 +144,8 @@ impl Report {
             median: fitness.get(fitness.len() / 2).copied().unwrap_or(0.0),
             worst: *fitness.first().unwrap_or(&0.0),
             island_best: islands.iter().map(|i| i.best().map_or(0.0, |(_, f)| f)).collect(),
+            saved_fitness: saved.fitness,
+            saved_rank: saved.rank + 1,
             best_score: mean_score(&best_runs),
             best_progress: mean(best_runs.iter().map(|r| r.progress)),
             best_laps: mean(best_runs.iter().map(|r| r.laps())),
@@ -164,15 +183,15 @@ impl Report {
     /// What the console columns mean; printed once at the start.
     pub fn legend() -> &'static str {
         "drift q = angle-time (1.0 = a 45° drift held the whole run). top = the most drift-y genome, \
-         best = the fittest. score = banked judged points. angle = typical biggest angle per run. \
+         saved = the driver written to best.genome (fitness over all its runs; # = its fitness rank this generation). score = banked judged points. angle = typical biggest angle per run. \
          ends: T time up, NP no progress, CR crashed, ST stalled, SP spun, BK backwards"
     }
 
     /// Column headings; printed at the start and every so often.
     pub fn header() -> String {
         [
-            "  gen stage │ ── top drifter ──────────── │ ── fittest ────────── │ ── population ────────────────── │ ends %            │ pedals %        │",
-            "            │ drift q  angle  score  laps │ fitness drift q  laps │ drift q  >20°  angle spins  bdiv │  T NP CR ST SP BK │  hb clutch slip │ secs",
+            "  gen stage │ ── top drifter ──────────── │ ── saved best ──────────── │ ── population ────────────────── │ ends %            │ pedals %        │",
+            "            │ drift q  angle  score  laps │ fitness drift q  laps    # │ drift q  >20°  angle spins  bdiv │  T NP CR ST SP BK │  hb clutch slip │ secs",
         ]
         .join("\n")
     }
@@ -187,16 +206,17 @@ impl Report {
             _ => String::new(),
         };
         format!(
-            "{:>5} {:<6}│   {:>5.2} {:>5.0}° {:>6.0} {:>5.2} │ {:>7.0}   {:>5.2} {:>5.2} │   {:>5.2} {:>4.0}% {:>5.0}° {:>5.1} {:>5.3} │ {} {} {} {} {} {} │ {:>3.0} {:>6.0} {:>4.0} │ {:>4.1}{test}",
+            "{:>5} {:<6}│   {:>5.2} {:>5.0}° {:>6.0} {:>5.2} │ {:>7.0}   {:>5.2} {:>5.2} {:>4} │   {:>5.2} {:>4.0}% {:>5.0}° {:>5.1} {:>5.3} │ {} {} {} {} {} {} │ {:>3.0} {:>6.0} {:>4.0} │ {:>4.1}{test}",
             self.generation,
             self.stage,
             self.top_quality,
             self.top_angle,
             self.top_score,
             self.top_laps,
-            self.best,
+            self.saved_fitness,
             self.best_quality,
             self.best_laps,
+            self.saved_rank,
             self.mean_quality,
             self.above_20_share * 100.0,
             self.max_angle_p50,
@@ -216,131 +236,131 @@ impl Report {
     }
 }
 
-/// Appends rows to `metrics.csv`, writing the header for a new file.
+/// Appends rows to `metrics.csv`, writing the header for a new file. Rows
+/// follow the file's own header, so a resumed run keeps the columns it
+/// started with (newer ones are left out, missing ones left blank).
 pub struct MetricsCsv {
     file: File,
+    columns: Vec<String>,
 }
 
 impl MetricsCsv {
     pub fn open(path: &Path, islands: usize) -> io::Result<Self> {
-        let new = !path.exists();
+        let header = std::fs::read_to_string(path).ok().and_then(|text| text.lines().next().map(str::to_owned));
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-        if new {
-            let mut columns: Vec<String> = ["generation", "stage", "best", "mean", "median", "worst"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
-            columns.extend((0..islands).map(|i| format!("island{i}_best")));
-            columns.extend(
-                [
-                    "best_line",
-                    "best_angle",
-                    "best_style",
-                    "best_penalty",
-                    "best_progress",
-                    "best_laps",
-                    "mean_line",
-                    "mean_angle",
-                    "mean_style",
-                    "mean_penalty",
-                    "mean_progress",
-                    "drift_share",
-                    "drift_angle",
-                    "zones",
-                    "clutch_pedal",
-                    "clutch_slip",
-                    "clutch_peak",
-                ]
-                .iter()
-                .map(|s| s.to_string()),
-            );
-            columns.extend(EndReason::ALL.iter().map(|e| format!("end_{}", e.name().replace(' ', "_"))));
-            columns.extend(
-                [
-                    "best_quality",
-                    "mean_quality",
-                    "top_quality",
-                    "top_angle",
-                    "top_score",
-                    "top_laps",
-                    "spins",
-                    "handbrake_share",
-                    "clutch_share",
-                    "max_angle_p50",
-                    "max_angle_p90",
-                    "above_20_share",
-                    "behaviour_diversity",
-                    "diversity",
-                    "sigma",
-                    "seconds",
-                    "steps_per_sec",
-                    "test_fitness",
-                    "test_laps",
-                ]
-                .iter()
-                .map(|s| s.to_string()),
-            );
-            writeln!(file, "{}", columns.join(","))?;
-        }
-        Ok(Self { file })
+        let columns = match header.filter(|h| !h.is_empty()) {
+            Some(header) => header.split(',').map(str::to_owned).collect(),
+            None => {
+                let columns: Vec<String> = Report::default().fields(islands).into_iter().map(|(name, _)| name).collect();
+                writeln!(file, "{}", columns.join(","))?;
+                columns
+            }
+        };
+        Ok(Self { file, columns })
     }
 
     pub fn write(&mut self, r: &Report) -> io::Result<()> {
-        let mut row = vec![r.generation.to_string(), r.stage.clone()];
-        let mut num = |v: f64| row.push(format!("{v:.4}"));
-        for v in [r.best, r.mean, r.median, r.worst] {
-            num(v);
-        }
-        for &v in &r.island_best {
-            num(v);
-        }
-        let (b, m) = (r.best_score, r.mean_score);
-        for v in [b.line, b.angle, b.style, b.penalty, r.best_progress, r.best_laps] {
-            num(v);
-        }
-        for v in [
-            m.line,
-            m.angle,
-            m.style,
-            m.penalty,
-            r.mean_progress,
-            r.drift_share,
-            r.drift_angle,
-            r.zones,
-            r.clutch_pedal,
-            r.clutch_slip,
-            r.clutch_peak,
-        ] {
-            num(v);
-        }
-        for v in r.ends {
-            num(v);
-        }
-        for v in [
-            r.best_quality,
-            r.mean_quality,
-            r.top_quality,
-            r.top_angle,
-            r.top_score,
-            r.top_laps,
-            r.spins,
-            r.handbrake_share,
-            r.clutch_share,
-            r.max_angle_p50,
-            r.max_angle_p90,
-            r.above_20_share,
-            r.behaviour_diversity,
-            r.diversity,
-            r.sigma,
-            r.seconds,
-            r.steps_per_sec,
-        ] {
-            num(v);
-        }
-        let optional = |v: Option<f64>| v.map_or(String::new(), |v| format!("{v:.4}"));
-        row.push(optional(r.test_fitness));
-        row.push(optional(r.test_laps));
+        let fields = r.fields(r.island_best.len());
+        let row: Vec<&str> = self
+            .columns
+            .iter()
+            .map(|c| fields.iter().find(|(name, _)| name == c).map_or("", |(_, v)| v.as_str()))
+            .collect();
         writeln!(self.file, "{}", row.join(","))?;
         self.file.flush()
+    }
+}
+
+impl Report {
+    /// Every CSV column, in order, with this report's value.
+    fn fields(&self, islands: usize) -> Vec<(String, String)> {
+        let mut out = vec![("generation".to_owned(), self.generation.to_string()), ("stage".to_owned(), self.stage.clone())];
+        let mut num = |name: &str, v: f64| out.push((name.to_owned(), format!("{v:.4}")));
+        for (name, v) in [("best", self.best), ("mean", self.mean), ("median", self.median), ("worst", self.worst)] {
+            num(name, v);
+        }
+        for i in 0..islands {
+            num(&format!("island{i}_best"), self.island_best.get(i).copied().unwrap_or(0.0));
+        }
+        let (b, m) = (self.best_score, self.mean_score);
+        for (name, v) in [
+            ("best_line", b.line),
+            ("best_angle", b.angle),
+            ("best_style", b.style),
+            ("best_penalty", b.penalty),
+            ("best_progress", self.best_progress),
+            ("best_laps", self.best_laps),
+            ("mean_line", m.line),
+            ("mean_angle", m.angle),
+            ("mean_style", m.style),
+            ("mean_penalty", m.penalty),
+            ("mean_progress", self.mean_progress),
+            ("drift_share", self.drift_share),
+            ("drift_angle", self.drift_angle),
+            ("zones", self.zones),
+            ("clutch_pedal", self.clutch_pedal),
+            ("clutch_slip", self.clutch_slip),
+            ("clutch_peak", self.clutch_peak),
+        ] {
+            num(name, v);
+        }
+        for (reason, v) in EndReason::ALL.iter().zip(self.ends) {
+            num(&format!("end_{}", reason.name().replace(' ', "_")), v);
+        }
+        for (name, v) in [
+            ("best_quality", self.best_quality),
+            ("mean_quality", self.mean_quality),
+            ("top_quality", self.top_quality),
+            ("top_angle", self.top_angle),
+            ("top_score", self.top_score),
+            ("top_laps", self.top_laps),
+            ("spins", self.spins),
+            ("handbrake_share", self.handbrake_share),
+            ("clutch_share", self.clutch_share),
+            ("max_angle_p50", self.max_angle_p50),
+            ("max_angle_p90", self.max_angle_p90),
+            ("above_20_share", self.above_20_share),
+            ("behaviour_diversity", self.behaviour_diversity),
+            ("diversity", self.diversity),
+            ("sigma", self.sigma),
+            ("seconds", self.seconds),
+            ("steps_per_sec", self.steps_per_sec),
+        ] {
+            num(name, v);
+        }
+        let optional = |v: Option<f64>| v.map_or(String::new(), |v| format!("{v:.4}"));
+        out.push(("test_fitness".to_owned(), optional(self.test_fitness)));
+        out.push(("test_laps".to_owned(), optional(self.test_laps)));
+        out.push(("saved_fitness".to_owned(), format!("{:.4}", self.saved_fitness)));
+        out.push(("saved_rank".to_owned(), self.saved_rank.to_string()));
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rows_follow_the_files_own_header() {
+        let dir = std::env::temp_dir().join(format!("drift-metrics-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let report = Report { generation: 7, stage: "slide".into(), best: 12.5, saved_rank: 2, island_best: vec![1.0], ..Report::default() };
+
+        // A new file gets every column.
+        let fresh = dir.join("fresh.csv");
+        MetricsCsv::open(&fresh, 1).unwrap().write(&report).unwrap();
+        let text = std::fs::read_to_string(&fresh).unwrap();
+        let mut lines = text.lines();
+        let (header, row) = (lines.next().unwrap(), lines.next().unwrap());
+        assert_eq!(header.split(',').count(), row.split(',').count());
+        assert!(header.ends_with("saved_fitness,saved_rank") && row.ends_with(",2"));
+
+        // An older file (resumed run) keeps its columns, in its order.
+        let old = dir.join("old.csv");
+        std::fs::write(&old, "stage,generation,best,gone\n").unwrap();
+        MetricsCsv::open(&old, 1).unwrap().write(&report).unwrap();
+        assert_eq!(std::fs::read_to_string(&old).unwrap(), "stage,generation,best,gone\nslide,7,12.5000,\n");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

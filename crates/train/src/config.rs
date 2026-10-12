@@ -19,6 +19,10 @@ pub struct TrainingConfig {
     pub episode: EpisodeConfig,
     pub tracks: TrackConfig,
     pub checkpoints: CheckpointConfig,
+    /// Picking the driver saved as best.genome (off if missing, so older
+    /// runs still resume).
+    #[serde(default)]
+    pub best: BestConfig,
     pub curriculum: Vec<Stage>,
 }
 
@@ -45,6 +49,23 @@ pub struct TrackConfig {
     #[serde(default)]
     pub fixed: Vec<String>,
     pub test_every: u32,
+}
+
+/// Before saving best.genome, the top `candidates` genomes by fitness drive
+/// `tracks` extra generated tracks, and the best over all its runs is saved.
+/// A genome that topped the generation on a lucky draw doesn't replace a
+/// steadier one. 0 (either) = just save the generation's fittest.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BestConfig {
+    pub candidates: usize,
+    pub tracks: u32,
+}
+
+impl BestConfig {
+    pub fn enabled(&self) -> bool {
+        self.candidates > 1 && self.tracks > 0
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

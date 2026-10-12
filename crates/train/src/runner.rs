@@ -67,6 +67,29 @@ pub fn run_genome(spec: &NetworkSpec, params: &[f32], tracks: &[Arc<Track>], see
         .collect()
 }
 
+/// Runs for a few chosen genomes (`(island, genome)`): `[candidate][track]`.
+/// Parallel over every (candidate, track) pair, since there are few genomes.
+pub fn evaluate_some(
+    islands: &[Island],
+    chosen: &[(usize, usize)],
+    tracks: &[Arc<Track>],
+    seeds: &[u64],
+    env: &Env,
+) -> Vec<Vec<EpisodeResult>> {
+    let jobs: Vec<(usize, usize)> = (0..chosen.len()).flat_map(|c| (0..tracks.len()).map(move |t| (c, t))).collect();
+    let flat: Vec<EpisodeResult> = jobs
+        .par_iter()
+        .map(|&(c, t)| {
+            let (i, g) = chosen[c];
+            let island = &islands[i];
+            let run = run_genome(&island.spec, &island.genomes[g].params, &tracks[t..=t], &seeds[t..=t], env);
+            run.into_iter().next().expect("one track, one run")
+        })
+        .collect();
+    let mut flat = flat.into_iter();
+    chosen.iter().map(|_| flat.by_ref().take(tracks.len()).collect()).collect()
+}
+
 /// Results for every genome: `[island][genome][track]`.
 pub fn evaluate(islands: &[Island], tracks: &[Arc<Track>], seeds: &[u64], env: &Env) -> Vec<Vec<Vec<EpisodeResult>>> {
     let jobs: Vec<(usize, usize)> =

@@ -62,6 +62,14 @@ test_every = 10           # best genome vs the library tracks (tracks/*.toml) ev
 [checkpoints]
 every = 10                # full population saved every N generations
 
+# Which driver gets saved as best.genome (and judges curriculum advance and
+# the test runs): the top `candidates` by fitness also drive `tracks` extra
+# generated tracks, and the best over all its runs wins, so a lucky draw
+# doesn't replace a steadier driver. 0 = just the generation's fittest.
+[best]
+candidates = 5
+tracks = 6
+
 # Curriculum. Per run:
 #   driving = progress * metres (capped at progress_cap_laps) + time_alive * seconds
 #   fitness = driving * (1 + drift_bonus * drift_quality)
@@ -72,9 +80,14 @@ every = 10                # full population saved every N generations
 # `shaping` softens the rules while learning: drift counts from a few degrees,
 # flat speed multiplier, spins don't end the run, no bobble penalty. The final
 # stage has no shaping, so it's judged on the real config/scoring.toml.
-# Moves on when the generation's best genome averages `at_least` of `metric`
+# Moves on when the saved best genome averages `at_least` of `metric`
 # for `generations` in a row. Keep penalty weights small: big penalties teach
 # the cars that stopping is safest.
+# `polish` (optional) fine-tunes a stage: smaller mutation steps, no random
+# immigrants, more generated tracks per generation. Entering it (by advance
+# or --stage) resets sigma to its sigma_start without reseeding. E.g.
+#   polish = { sigma_start = 0.02, sigma_max = 0.1, immigrants = 0, tracks_per_generation = 8 }
+# Usually on a last stage that a judged stage advances into.
 
 [[curriculum]]
 name = "drive"

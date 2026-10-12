@@ -35,7 +35,8 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - Done: library tracks carry a `test` flag (on unless `test = false`, e.g. the skidpad); the trainer tests only on those.
 - Done: run dashboard in the viewer (`C` / `--charts`): fitness, drift quality, angle, pedals, diversity, end reasons, from `metrics.csv`.
 - Done: library panel (`O` / `--library`): every track in `tracks/`, click to drive, toggle the test set, rename, delete (moved to `tracks/deleted/`). `L` cycles the library.
-- Next: polish phase. Alongside: user-led training to get cars drifting through drive -> slide -> judged.
+- Done: polish phase (`polish` on a stage) and a sturdier best.genome (`[best]`: top 5 re-run on 6 extra tracks).
+- Next: M3's features are in; what's left is user-led training to get cars drifting through drive -> slide -> judged (and, once judged works, polishing).
 
 **Conventions**
 - The sim uses `f64` (SI units). The NN will use `f32`.
@@ -227,7 +228,8 @@ Outputs are produced once per decision and held until the next one.
 - **Starting priors:** calm start (straight, some throttle, brake off, handbrake/clutch light).
 - **Early termination:** a crash, spin, or no progress for a few seconds ends the episode.
 - **Diversity:** small tournaments, a few random immigrants per generation; diversity is tracked in behaviour space (lap share, drift share, angle, handbrake, clutch) as well as weight space.
-- **Polish phase:** smaller σ, more tracks per evaluation, and elites re-evaluated each generation.
+- **Polish phase:** an optional `polish` block on a curriculum stage: smaller σ (reset on entry, no reseed), no immigrants, more generated tracks per generation. Every genome, elites included, is already re-evaluated on fresh tracks each generation.
+- **Saved best (`[best]`):** the top few genomes by fitness also drive some extra generated tracks; the best over all its runs is saved as best.genome, judges curriculum advance and runs the test set, so a lucky draw can't replace a steadier driver.
 - **Monitoring:** see *Network view & metrics*.
 
 ## Human review

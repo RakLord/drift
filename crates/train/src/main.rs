@@ -22,18 +22,22 @@ use std::time::Instant;
 use agent::genome_file::{self, GenomeHeader, SavedGenome};
 use common::Rng;
 use common::paths::workspace_path;
-use evo::{Curriculum, Ids, Island, migrate};
+use evo::{Curriculum, Ids, Island, Stage, migrate};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sim::car::CarParams;
+use sim::episode::EpisodeResult;
 use sim::scoring::ScoringParams;
 use sim::track::generator::GeneratorParams;
 use sim::track::{Track, TrackDef};
 
 use checkpoint::Population;
 use config::TrainingConfig;
-use metrics::{MetricsCsv, Report};
-use runner::{Env, evaluate, run_genome};
+use metrics::{MetricsCsv, Report, Saved};
+use runner::{Env, evaluate, evaluate_some, run_genome};
+
+/// Seed stream for the `[best]` check tracks, apart from the training ones.
+const CHECK_STREAM: u64 = 0xC4EC_0B57;
 
 struct Args {
     name: String,
@@ -103,6 +107,46 @@ fn library_tracks(fixed: &[String]) -> Vec<Arc<Track>> {
         .filter_map(|p| TrackDef::load(p).ok().filter(|def| def.test).and_then(|def| Track::build(def).ok()))
         .map(Arc::new)
         .collect()
+}
+
+/// Pick the driver to save as best.genome. Without `[best]`, the fittest.
+/// With it, the top few by fitness also drive some extra tracks, and the
+/// best over all its runs wins.
+fn pick_saved(
+    islands: &[Island],
+    results: &[Vec<Vec<EpisodeResult>>],
+    cfg: &TrainingConfig,
+    generator: &GeneratorParams,
+    generation: u32,
+    stage: &Stage,
+    env: &Env,
+) -> Result<Saved, String> {
+    let mut ranked: Vec<(usize, usize)> =
+        islands.iter().enumerate().flat_map(|(i, island)| (0..island.fitness.len()).map(move |g| (i, g))).collect();
+    ranked.sort_by(|&(ai, ag), &(bi, bg)| islands[bi].fitness[bg].total_cmp(&islands[ai].fitness[ag]));
+    let &(island, genome) = ranked.first().ok_or("no genomes")?;
+    if !cfg.best.enabled() {
+        let runs = results[island][genome].clone();
+        return Ok(Saved { island, genome, fitness: stage.fitness(&runs), runs, rank: 0 });
+    }
+
+    let chosen = &ranked[..cfg.best.candidates.min(ranked.len())];
+    let check_seed = runner::mix(cfg.seed, CHECK_STREAM);
+    let tracks = runner::generation_tracks(generator, check_seed, generation, cfg.best.tracks);
+    let seeds = runner::episode_seeds(check_seed, generation, tracks.len());
+    let checks = evaluate_some(islands, chosen, &tracks, &seeds, env);
+    chosen
+        .iter()
+        .zip(checks)
+        .enumerate()
+        .map(|(rank, (&(island, genome), check))| {
+            let mut runs = results[island][genome].clone();
+            runs.extend(check);
+            Saved { island, genome, fitness: stage.fitness(&runs), runs, rank }
+        })
+        // On a tie the higher-ranked one wins.
+        .reduce(|best, next| if next.fitness > best.fitness { next } else { best })
+        .ok_or_else(|| "no genomes".to_owned())
 }
 
 fn main() {
@@ -193,32 +237,48 @@ fn run(args: Args) -> Result<(), String> {
         }
     };
     let mut curriculum = Curriculum::new(cfg.curriculum.clone(), args.stage.unwrap_or(pop.stage));
+    // Jumping straight into a polish stage (--stage): fine steps from the start.
+    if curriculum.current != pop.stage
+        && let Some(polish) = &curriculum.stage().polish
+    {
+        for g in pop.islands.iter_mut().flat_map(|i| i.genomes.iter_mut()) {
+            g.sigma = polish.sigma_start;
+        }
+        println!("== polishing: sigma set to {}", polish.sigma_start);
+    }
     let mut csv = MetricsCsv::open(&run_dir.join("metrics.csv"), pop.islands.len()).map_err(|e| e.to_string())?;
     const HEADER_EVERY: u32 = 20;
     let mut first_generation = true;
 
     let shapes: Vec<String> = pop.islands.iter().map(|i| i.spec.describe()).collect();
     println!(
-        "run '{}': {} islands x {} [{}], {} generated tracks/gen, fixed tracks: [{}], test tracks: {} ({}), {} threads",
+        "run '{}': {} islands x {} [{}], {} generated tracks/gen, fixed tracks: [{}], test tracks: {} ({}), best.genome check: {}, {} threads",
         args.name,
         pop.islands.len(),
         cfg.ga.population,
         shapes.join(", "),
-        cfg.tracks.per_generation,
+        curriculum.stage().tracks_per_generation(cfg.tracks.per_generation),
         fixed_tracks.iter().map(|t| t.def.name.as_str()).collect::<Vec<_>>().join(", "),
         test_tracks.len(),
         test_tracks.iter().map(|t| t.def.name.as_str()).collect::<Vec<_>>().join(", "),
+        if cfg.best.enabled() {
+            format!("top {} on {} extra tracks", cfg.best.candidates, cfg.best.tracks)
+        } else {
+            "off".to_owned()
+        },
         rayon::current_num_threads()
     );
 
     while pop.generation < cfg.generations {
         let generation = pop.generation;
         let started = Instant::now();
+        let stage = curriculum.stage().clone();
+        // A polish stage has its own (finer) GA settings and track count.
+        let ga = stage.ga(&cfg.ga);
         let mut tracks = fixed_tracks.clone();
-        tracks.extend(runner::generation_tracks(&generator, cfg.seed, generation, cfg.tracks.per_generation));
+        tracks.extend(runner::generation_tracks(&generator, cfg.seed, generation, stage.tracks_per_generation(cfg.tracks.per_generation)));
         let seeds = runner::episode_seeds(cfg.seed, generation, tracks.len());
         // Shaping stages run on softer rules; the final stage on the real ones.
-        let stage = curriculum.stage().clone();
         let (scoring, episode) = stage.rules(&env.scoring, &env.episode);
         let stage_env = Env { car: env.car.clone(), scoring, episode };
         let results = evaluate(&pop.islands, &tracks, &seeds, &stage_env);
@@ -227,18 +287,11 @@ fn run(args: Args) -> Result<(), String> {
             island.fitness = island_results.iter().map(|runs| stage.fitness(runs)).collect();
             island.objectives = island_results.iter().map(|runs| stage.objectives(runs)).collect();
         }
-        let best = pop
-            .islands
-            .iter()
-            .enumerate()
-            .filter_map(|(i, island)| island.best().map(|(g, f)| (i, g, f)))
-            .max_by(|a, b| a.2.total_cmp(&b.2))
-            .ok_or("no genomes")?;
-        let (bi, bg, best_fitness) = best;
-        let best_island = &pop.islands[bi];
-        let best_genome = &best_island.genomes[bg];
+        let saved = pick_saved(&pop.islands, &results, &cfg, &generator, generation, &stage, &stage_env)?;
+        let best_island = &pop.islands[saved.island];
+        let best_genome = &best_island.genomes[saved.genome];
 
-        let mut report = Report::new(generation, &stage.name, &pop.islands, &results, (bi, bg), 0.0);
+        let mut report = Report::new(generation, &stage.name, &pop.islands, &results, &saved, 0.0);
         let due_test = cfg.tracks.test_every > 0 && generation % cfg.tracks.test_every == 0 && !test_tracks.is_empty();
         if due_test {
             let seeds = runner::episode_seeds(cfg.seed, u32::MAX, test_tracks.len());
@@ -253,33 +306,46 @@ fn run(args: Args) -> Result<(), String> {
 
         // This generation's best driver is always on disk.
         let note = format!("run {} gen {generation} stage {}", args.name, stage.name);
-        let saved = SavedGenome {
-            header: GenomeHeader::new(best_island.spec.clone(), generation, bi as u32, best_fitness, note),
+        let file = SavedGenome {
+            header: GenomeHeader::new(best_island.spec.clone(), generation, saved.island as u32, saved.fitness, note),
             params: best_genome.params.clone(),
         };
-        genome_file::save(run_dir.join("best.genome"), &saved).map_err(|e| e.to_string())?;
+        genome_file::save(run_dir.join("best.genome"), &file).map_err(|e| e.to_string())?;
 
-        let advanced = curriculum.observe(&results[bi][bg]);
+        // Judged on all the saved driver's runs, so one lucky draw can't
+        // move the curriculum on.
+        let advanced = curriculum.observe(&saved.runs);
         if advanced {
-            println!("== curriculum: moving on to stage '{}'", curriculum.stage().name);
+            let next = curriculum.stage();
+            println!("== curriculum: moving on to stage '{}'", next.name);
+            if next.polish.is_some() {
+                println!("== polishing: {} generated tracks/gen", next.tracks_per_generation(cfg.tracks.per_generation));
+            }
         }
-        let migration_due = cfg.ga.migration_every > 0 && generation > 0 && generation % cfg.ga.migration_every == 0;
-        if migration_due && let Some((from, to)) = migrate(&mut pop.islands, &cfg.ga, &mut pop.ids) {
+        let migration_due = ga.migration_every > 0 && generation > 0 && generation % ga.migration_every == 0;
+        if migration_due && let Some((from, to)) = migrate(&mut pop.islands, &ga, &mut pop.ids) {
             println!("== island {to} replaced by a copy of island {from} ({})", pop.islands[to].spec.describe());
         }
 
+        // The next stage's settings, if it just changed.
+        let next_ga = curriculum.stage().ga(&cfg.ga);
         for island in &mut pop.islands {
             let mut rng = Rng::with_stream(runner::mix(cfg.seed, u64::from(generation)), island.index as u64);
             let best = island.best().map(|(g, _)| island.genomes[g].params.clone());
-            island.breed(&cfg.ga, &mut rng, &mut pop.ids, generation + 1);
+            island.breed(&ga, &mut rng, &mut pop.ids, generation + 1);
             // New stage: fresh step sizes and a burst of variety around the
-            // island's best, so it can explore the new reward.
+            // island's best, so it can explore the new reward (a polish
+            // stage only resets the step sizes).
             if advanced && let Some(best) = best {
-                island.restage(&best, &cfg.ga, &mut rng, &mut pop.ids, generation + 1);
+                island.restage(&best, &next_ga, &mut rng, &mut pop.ids, generation + 1);
             }
         }
         if advanced {
-            println!("== sigma reset to {} and {:.0}% of each island reseeded", cfg.ga.sigma_start, cfg.ga.reseed_fraction * 100.0);
+            println!(
+                "== sigma reset to {} and {:.0}% of each island reseeded",
+                next_ga.sigma_start,
+                next_ga.reseed_fraction * 100.0
+            );
         }
         pop.generation += 1;
         pop.stage = curriculum.current;

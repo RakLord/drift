@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use sim::episode::{EpisodeConfig, EpisodeResult};
 use sim::scoring::ScoringParams;
 
+use crate::GaConfig;
+
 /// Angle-seconds per second that counts as a perfect drift quality of 1.
 pub const QUALITY_ANGLE_DEG: f64 = 45.0;
 
@@ -45,6 +47,25 @@ pub struct Stage {
     /// When to move on to the next stage (none = final stage).
     #[serde(default)]
     pub advance: Option<Advance>,
+    /// Fine-tuning settings for this stage (none = the normal GA settings).
+    #[serde(default)]
+    pub polish: Option<Polish>,
+}
+
+/// Fine-tuning: smaller mutation steps, no random immigrants, and more
+/// tracks per generation so a lucky draw counts for less. Entering a polish
+/// stage resets every sigma to `sigma_start`, without reseeding.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Polish {
+    pub sigma_start: f64,
+    #[serde(default)]
+    pub sigma_max: Option<f64>,
+    #[serde(default)]
+    pub immigrants: Option<usize>,
+    /// Generated tracks per generation (replaces `tracks.per_generation`).
+    #[serde(default)]
+    pub tracks_per_generation: Option<u32>,
 }
 
 /// Scoring and episode rules for shaping stages.
@@ -145,6 +166,24 @@ impl Stage {
         [mean(results, |r| self.base(r)), mean(results, drift_quality)]
     }
 
+    /// GA settings for this stage: the base ones, with any polish applied.
+    pub fn ga(&self, base: &GaConfig) -> GaConfig {
+        let mut ga = base.clone();
+        if let Some(p) = &self.polish {
+            ga.sigma_start = p.sigma_start;
+            ga.sigma_max = p.sigma_max.unwrap_or(ga.sigma_max).max(p.sigma_start);
+            ga.immigrants = p.immigrants.unwrap_or(ga.immigrants);
+            // Polishing narrows in on what works: no burst of variety.
+            ga.reseed_fraction = 0.0;
+        }
+        ga
+    }
+
+    /// Generated tracks per generation for this stage.
+    pub fn tracks_per_generation(&self, base: u32) -> u32 {
+        self.polish.as_ref().and_then(|p| p.tracks_per_generation).unwrap_or(base)
+    }
+
     /// Scoring and episode rules for this stage, from the real ones.
     pub fn rules(&self, scoring: &ScoringParams, episode: &EpisodeConfig) -> (ScoringParams, EpisodeConfig) {
         let (mut scoring, mut episode) = (scoring.clone(), episode.clone());
@@ -226,6 +265,7 @@ mod tests {
             penalty: 1.0,
             shaping: None,
             advance,
+            polish: None,
         }
     }
 
@@ -274,6 +314,41 @@ mod tests {
         // A stage without shaping keeps the real rules.
         let (unchanged, _) = stage(1.0, 0.0, None).rules(&real, &episode);
         assert_eq!(unchanged.drift.start_angle_deg, real.drift.start_angle_deg);
+    }
+
+    #[test]
+    fn polish_narrows_the_ga_settings() {
+        let base = GaConfig {
+            population: 20,
+            elite_fraction: 0.1,
+            tournament_size: 3,
+            crossover_rate: 0.7,
+            mutation_rate: 0.1,
+            sigma_start: 0.1,
+            sigma_min: 0.005,
+            sigma_max: 0.5,
+            sigma_adapt: 0.2,
+            reset_rate: 0.001,
+            immigrants: 2,
+            migration_every: 10,
+            migration_gap: 0.8,
+            selection: crate::Selection::Pareto,
+            reseed_fraction: 0.3,
+            reseed_sigma: 0.3,
+        };
+        let plain = stage(1.0, 0.0, None);
+        assert_eq!(plain.ga(&base).sigma_start, 0.1);
+        assert_eq!(plain.tracks_per_generation(3), 3);
+
+        let polish = Polish { sigma_start: 0.02, sigma_max: Some(0.1), immigrants: Some(0), tracks_per_generation: Some(8) };
+        let s = Stage { polish: Some(polish), ..stage(1.0, 0.0, None) };
+        let ga = s.ga(&base);
+        assert_eq!((ga.sigma_start, ga.sigma_max, ga.immigrants, ga.reseed_fraction), (0.02, 0.1, 0, 0.0));
+        assert_eq!(ga.population, base.population, "everything else unchanged");
+        assert_eq!(s.tracks_per_generation(3), 8);
+        // Only sigma_start given: the rest stay as they were.
+        let s = Stage { polish: Some(Polish { sigma_start: 0.02, sigma_max: None, immigrants: None, tracks_per_generation: None }), ..s };
+        assert_eq!((s.ga(&base).sigma_max, s.ga(&base).immigrants, s.tracks_per_generation(3)), (0.5, 2, 3));
     }
 
     #[test]
