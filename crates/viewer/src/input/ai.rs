@@ -74,6 +74,9 @@ pub struct AiDriver {
     termination: Termination,
     /// The last thing it saw (for the inputs panel).
     pub last_observation: Option<Observation>,
+    /// How many times the network has run, so viewers can tell a fresh
+    /// decision from held controls.
+    pub decisions: u64,
     /// Off = you're driving; Tab hands back.
     pub enabled: bool,
 }
@@ -96,6 +99,7 @@ impl AiDriver {
             tick: 0,
             termination: Termination::default(),
             last_observation: None,
+            decisions: 0,
             enabled: true,
         };
         match ai.read() {
@@ -176,6 +180,7 @@ impl AiDriver {
             let observation = self.observer.observe(world, scorer);
             self.held = driver.decide(&observation);
             self.last_observation = Some(observation);
+            self.decisions += 1;
         }
         self.tick += 1;
         self.held
@@ -199,6 +204,11 @@ impl AiDriver {
         let following = if self.follow { "  following" } else { "" };
         let next = self.pending.as_ref().map_or(String::new(), |p| format!("  (next: gen {})", p.header.generation));
         format!("AI gen {} {} fitness {:.0}{following}{next}", h.generation, h.spec.describe(), h.fitness)
+    }
+
+    /// The network driving now; its activations are from the last decision.
+    pub fn network(&self) -> Option<&Network> {
+        self.current.as_ref().map(|(_, d)| &d.network)
     }
 
     pub fn generation(&self) -> Option<u32> {

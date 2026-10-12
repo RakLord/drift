@@ -8,8 +8,8 @@ pub struct AffineRows<'a> {
     pub inputs: usize,
 }
 
-impl AffineRows<'_> {
-    pub fn row(&self, r: usize) -> &[f32] {
+impl<'a> AffineRows<'a> {
+    pub fn row(&self, r: usize) -> &'a [f32] {
         let width = self.inputs + 1;
         &self.data[r * width..(r + 1) * width]
     }

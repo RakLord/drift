@@ -116,6 +116,39 @@ impl NetworkSpec {
     }
 }
 
+/// A read-only look at one layer, for tools that draw or inspect a network.
+pub struct LayerView<'a> {
+    /// One row per neuron: its incoming weights, then its bias.
+    pub weights: AffineRows<'a>,
+    activations: &'a [Activation],
+}
+
+impl LayerView<'_> {
+    pub fn inputs(&self) -> usize {
+        self.weights.inputs
+    }
+
+    pub fn outputs(&self) -> usize {
+        self.weights.rows
+    }
+
+    /// The activation function of neuron `row`.
+    pub fn activation(&self, row: usize) -> Activation {
+        if self.activations.len() == 1 { self.activations[0] } else { self.activations[row] }
+    }
+
+    pub fn bias(&self, row: usize) -> f32 {
+        self.weights.row(row)[self.weights.inputs]
+    }
+
+    /// Neuron `row`'s weighted sum before its activation, given this layer's
+    /// input.
+    pub fn pre_activation(&self, row: usize, input: &[f32]) -> f32 {
+        let r = self.weights.row(row);
+        r[..self.weights.inputs].iter().zip(input).map(|(w, x)| w * x).sum::<f32>() + r[self.weights.inputs]
+    }
+}
+
 /// A runnable network: a shape plus its parameters, with scratch buffers so
 /// `forward` doesn't allocate.
 #[derive(Clone, Debug)]
@@ -146,6 +179,32 @@ impl Network {
     pub fn set_params(&mut self, params: &[f32]) {
         assert_eq!(params.len(), self.params.len());
         self.params.copy_from_slice(params);
+    }
+
+    /// Number of weight layers (hidden layers + the output layer).
+    pub fn layer_count(&self) -> usize {
+        self.layers.len()
+    }
+
+    /// Weight layer `i`: 0 reads the network's input, the last produces its
+    /// outputs.
+    pub fn layer(&self, i: usize) -> LayerView<'_> {
+        let l = &self.layers[i];
+        let activations = if i == self.layers.len() - 1 {
+            &self.spec.outputs[..]
+        } else {
+            std::slice::from_ref(&self.spec.hidden[i].activation)
+        };
+        LayerView {
+            weights: AffineRows { data: &self.params[l.offset..l.offset + l.len()], rows: l.outputs, inputs: l.inputs },
+            activations,
+        }
+    }
+
+    /// Every layer's output from the last `forward` (after its activation),
+    /// hidden layers first; the last is the network's output.
+    pub fn activations(&self) -> &[Vec<f32>] {
+        &self.buffers
     }
 
     /// Run the network. The returned slice is valid until the next call.
@@ -206,6 +265,45 @@ mod tests {
         let ranges = spec.neuron_ranges();
         assert_eq!(ranges, vec![0..3, 3..6, 6..9, 9..12]);
         assert_eq!(spec.describe(), "2-2r-2");
+    }
+
+    #[test]
+    fn layer_views_match_the_flat_parameters_and_forward() {
+        let spec = NetworkSpec {
+            hidden: vec![LayerSpec { size: 3, activation: Activation::Tanh }],
+            outputs: vec![Activation::Tanh, Activation::Sigmoid],
+            ..tiny()
+        };
+        let mut net = Network::random(spec.clone(), &mut Rng::new(5));
+        let input = [0.3, -0.7];
+        let out = net.forward(&input).to_vec();
+        assert_eq!(net.layer_count(), 2);
+
+        // Each view's rows are the neuron ranges, in order.
+        let ranges = spec.neuron_ranges();
+        let rows: Vec<&[f32]> = (0..2)
+            .flat_map(|i| {
+                let layer = net.layer(i);
+                (0..layer.outputs()).map(move |r| layer.weights.row(r))
+            })
+            .collect();
+        for (row, range) in rows.iter().zip(&ranges) {
+            assert_eq!(*row, &net.params()[range.clone()]);
+        }
+
+        // Recomputing each layer from the stored activations reproduces forward.
+        let acts = net.activations();
+        assert_eq!(acts.last().unwrap(), &out);
+        for i in 0..2 {
+            let layer = net.layer(i);
+            let source: &[f32] = if i == 0 { &input } else { &acts[i - 1] };
+            for (r, &stored) in acts[i].iter().enumerate() {
+                let a = layer.activation(r).apply(layer.pre_activation(r, source));
+                assert!((a - stored).abs() < 1e-6);
+            }
+        }
+        assert_eq!(net.layer(1).activation(1), Activation::Sigmoid);
+        assert_eq!(net.layer(0).bias(2), net.params()[ranges[2].end - 1]);
     }
 
     #[test]

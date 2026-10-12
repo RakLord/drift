@@ -16,6 +16,7 @@ use sim::track::generator::GeneratorParams;
 use sim::track::{Track, TrackDef};
 
 use crate::app::Options;
+use crate::debug::network_view::NetworkView;
 use crate::debug::{inputs_panel, driver_prep_panel, gamepad_panel, history::History, telemetry};
 use crate::input::{Input, ai::AiDriver, autopilot::Autopilot};
 use crate::paths::workspace_file;
@@ -31,6 +32,18 @@ const SKIDPAD_TRACK: &str = "tracks/skidpad.toml";
 /// after a stall, e.g. dragging the window).
 const MAX_TICKS_PER_FRAME: u32 = 12;
 const TIME_SCALES: [f64; 5] = [0.1, 0.25, 0.5, 1.0, 2.0];
+/// Share of the window the track keeps when the network view is split.
+const SPLIT_TRACK_SHARE: f32 = 0.45;
+/// Room kept below a fullscreen network view for the status line and toasts.
+const FULL_STATUS_H: f32 = 76.0;
+
+/// How the network view is shown (`V` cycles).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum NetView {
+    Off,
+    Split,
+    Full,
+}
 
 pub struct PlayScreen {
     world: World,
@@ -54,6 +67,10 @@ pub struct PlayScreen {
     /// A trained genome driving (`--genome`).
     ai: Option<AiDriver>,
     show_inputs: bool,
+    net_view: NetView,
+    network_view: NetworkView,
+    /// Network decisions already shown in the view.
+    seen_decisions: u64,
     camera: FollowCamera,
     history: History,
     effects: Effects,
@@ -103,6 +120,7 @@ impl PlayScreen {
             AiDriver::new(path, options.follow).map_err(|e| warnings.push(e)).ok()
         });
 
+        let net_view = if options.net && ai.is_some() { NetView::Split } else { NetView::Off };
         let mesh = TrackMesh::new(&track);
         let scorer = Scorer::new(configs.scoring(), &track);
         let world = World::new(Arc::new(track), configs.car());
@@ -124,6 +142,9 @@ impl PlayScreen {
             autopilot: (options.autopilot || options.donut).then(|| Autopilot::new(options.donut)),
             ai,
             show_inputs: false,
+            net_view,
+            network_view: NetworkView::new(),
+            seen_decisions: 0,
             camera: FollowCamera::new(start),
             history: History::new(),
             effects: Effects::new(),
@@ -189,6 +210,7 @@ impl PlayScreen {
                 (_, Some(autopilot)) => autopilot.controls(&self.world, TICK),
                 _ => input,
             };
+            self.feed_network_view();
             self.previous = Pose::of(&self.world.car.state);
             self.world.step(controls, TICK);
             let car = &self.world.car;
@@ -224,6 +246,7 @@ impl PlayScreen {
             self.accumulator = 0.0;
         }
 
+        self.camera.set_view_width(self.track_width());
         if self.map_view {
             let (min, max) = track_bounds(&self.world.track);
             self.camera.show_area(min, max);
@@ -234,6 +257,11 @@ impl PlayScreen {
     }
 
     pub fn draw(&mut self) {
+        if self.net_view == NetView::Full {
+            self.draw_network_view();
+            self.draw_status(screen_width());
+            return;
+        }
         let shown = self.interpolated();
         let car = &self.world.car;
         let mut state = car.state.clone();
@@ -256,24 +284,30 @@ impl PlayScreen {
         }
 
         set_default_camera();
-        hud::draw(&state, &car.params);
-        hud::draw_track_info(&self.world);
-        self.score_hud.draw(&self.scorer);
+        let view_w = self.track_width();
+        hud::draw(&state, &car.params, view_w);
+        hud::draw_track_info(&self.world, view_w);
+        self.score_hud.draw(&self.scorer, view_w);
         if self.show_telemetry {
-            telemetry::draw_panel(&state, &car.params);
-            self.history.draw();
-            driver_prep_panel::draw(&self.world);
+            // The track side of a split is too narrow for the big panels.
+            if self.net_view == NetView::Off {
+                telemetry::draw_panel(&state, &car.params, view_w);
+                self.history.draw();
+            }
+            driver_prep_panel::draw(&self.world, view_w);
         }
         if self.show_gamepad {
             gamepad_panel::draw(&self.input.gamepad);
         }
         if self.show_inputs
+            && self.net_view == NetView::Off
             && let Some(ai) = &self.ai
             && let Some(observation) = &ai.last_observation
         {
             inputs_panel::draw(observation, &ai.decision());
         }
-        self.draw_status();
+        self.draw_network_view();
+        self.draw_status(view_w);
         // Last, so it sits on top. It handles its own input as it draws.
         if let Some(action) = self.panel.show(&mut self.gen_params, &mut self.gen_seed) {
             self.panel_action = Some(action);
@@ -289,6 +323,41 @@ impl PlayScreen {
             position: self.previous.position.lerp(current.position, alpha),
             heading: wrap_angle(self.previous.heading + angle_diff(self.previous.heading, current.heading) * alpha),
         }
+    }
+
+    /// Width of the screen area the track is drawn in.
+    fn track_width(&self) -> f32 {
+        match self.net_view {
+            NetView::Off => screen_width(),
+            NetView::Split => (screen_width() * SPLIT_TRACK_SHARE).round(),
+            NetView::Full => screen_width(),
+        }
+    }
+
+    /// Hand the network view the AI's latest decision, if it made a new one.
+    fn feed_network_view(&mut self) {
+        let Some(ai) = &self.ai else { return };
+        if self.net_view == NetView::Off || ai.decisions == self.seen_decisions {
+            return;
+        }
+        self.seen_decisions = ai.decisions;
+        if let (Some(net), Some(observation)) = (ai.network(), &ai.last_observation) {
+            self.network_view.on_decision(net, &observation.values);
+        }
+    }
+
+    fn draw_network_view(&mut self) {
+        let Some(ai) = &self.ai else { return };
+        let Some(net) = ai.network() else { return };
+        let rect = match self.net_view {
+            NetView::Off => return,
+            NetView::Split => {
+                let x = self.track_width();
+                Rect::new(x, 0.0, screen_width() - x, screen_height())
+            }
+            NetView::Full => Rect::new(0.0, 0.0, screen_width(), screen_height() - FULL_STATUS_H),
+        };
+        self.network_view.draw(net, rect, ai.enabled);
     }
 
     fn reset(&mut self) {
@@ -311,6 +380,7 @@ impl PlayScreen {
         self.previous = Pose::of(&self.world.car.state);
         self.camera.snap_to(self.world.car.state.position);
         self.history.clear();
+        self.network_view.clear();
         self.effects.clear();
         self.scorer = Scorer::new(self.scorer.params.clone(), &self.world.track);
         self.score_hud.clear();
@@ -351,6 +421,16 @@ impl PlayScreen {
             && let Some(ai) = &mut self.ai
         {
             ai.enabled = !ai.enabled;
+        }
+        if is_key_pressed(KeyCode::V) && self.ai.is_some() {
+            self.net_view = match self.net_view {
+                NetView::Off => NetView::Split,
+                NetView::Split => NetView::Full,
+                NetView::Full => NetView::Off,
+            };
+            // Start fresh: what it showed before may be stale.
+            self.network_view.clear();
+            self.seen_decisions = 0;
         }
         if is_key_pressed(KeyCode::B)
             && let Some(ai) = &mut self.ai
@@ -401,7 +481,9 @@ impl PlayScreen {
             self.time_scale_index = (self.time_scale_index + 1).min(TIME_SCALES.len() - 1);
         }
         let (_, wheel) = mouse_wheel();
-        if wheel != 0.0 && !self.panel.hovered() {
+        let over_net = self.net_view == NetView::Full
+            || (self.net_view == NetView::Split && mouse_position().0 >= self.track_width());
+        if wheel != 0.0 && !self.panel.hovered() && !over_net {
             self.camera.zoom_by(if wheel > 0.0 { 1.1 } else { 1.0 / 1.1 });
         }
     }
@@ -457,8 +539,9 @@ impl PlayScreen {
         }
     }
 
-    fn draw_status(&self) {
-        let (w, h) = (screen_width(), screen_height());
+    /// `w`: width of the area to centre the status line in.
+    fn draw_status(&self, w: f32) {
+        let h = screen_height();
         let scale = TIME_SCALES[self.time_scale_index];
         let mut status = vec![];
         if self.paused {
@@ -473,29 +556,57 @@ impl PlayScreen {
             None if self.autopilot.is_some() => status.push("AUTOPILOT".to_owned()),
             None => {}
         }
+        // Beside a split network view the bottom is full of HUD, so the
+        // status and toasts go under the score instead.
+        let split = self.net_view == NetView::Split;
+        // Under a fullscreen network view they share the strip at the bottom.
+        let full = self.net_view == NetView::Full;
         if !status.is_empty() {
-            text(&status.join("   "), w / 2.0 - 80.0, h - 70.0, 28.0, theme::SODIUM);
+            let line = status.join("   ");
+            let natural = measure_text(&line, None, 28, 1.0).width;
+            let size = (28.0 * (w - 32.0) / natural).clamp(16.0, 28.0);
+            let width = measure_text(&line, None, size as u16, 1.0).width;
+            let y = if split {
+                130.0
+            } else if full {
+                h - 12.0
+            } else {
+                h - 70.0
+            };
+            text(&line, ((w - width) / 2.0).max(16.0), y, size, theme::SODIUM);
         }
         if let Some((message, _)) = &self.toast {
-            // Multi-line toasts stack upwards from just above the status line.
-            for (i, line) in message.lines().rev().enumerate() {
+            // Multi-line toasts stack away from the status line.
+            let lines: Vec<&str> = message.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
                 let width = measure_text(line, None, 22, 1.0).width;
-                text(line, (w - width) / 2.0, h - 100.0 - i as f32 * 26.0, 22.0, theme::NEON_CYAN);
+                let from_bottom = (lines.len() - 1 - i) as f32 * 26.0;
+                let y = if split {
+                    162.0 + i as f32 * 26.0
+                } else if full {
+                    h - 44.0 - from_bottom
+                } else {
+                    h - 100.0 - from_bottom
+                };
+                text(line, ((w - width) / 2.0).max(16.0), y, 22.0, theme::NEON_CYAN);
             }
         }
 
-        let help: &[&str] = if self.show_help {
+        let help: &[&str] = if self.show_help && self.net_view != NetView::Full {
             &[
                 "pad: stick steer  RT throttle  LT brake  A/RB handbrake  X/LB clutch  Start reset",
                 "keys: WASD/arrows  Space handbrake  Shift clutch  R reset  P pause  [ ] speed  wheel zoom",
                 "N new track  F generator  L library track  K keep track  M map  E effects  T telemetry  G gamepad  H help",
-                "Y / pad Select: restart a stalled engine   AI (--genome / --follow): Tab take over  I inputs  B newest best",
+                "Y / pad Select: restart a stalled engine   AI (--genome / --follow): Tab take over  I inputs  V network  B newest best",
             ]
         } else {
             &["H: help"]
         };
+        // Shrink the help to fit beside the network view.
+        let widest = help.iter().map(|l| measure_text(l, None, 16, 1.0).width).fold(0.0, f32::max);
+        let size = (16.0 * (w - 32.0) / widest).clamp(10.0, 16.0);
         for (i, line) in help.iter().rev().enumerate() {
-            text(line, 16.0, h - 8.0 - i as f32 * 18.0, 16.0, theme::TEXT_DIM);
+            text(line, 16.0, h - 8.0 - i as f32 * (size + 2.0), size, theme::TEXT_DIM);
         }
     }
 }

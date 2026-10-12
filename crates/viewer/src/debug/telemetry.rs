@@ -23,8 +23,8 @@ pub fn draw_world(state: &CarState, params: &CarParams) {
 
 /// Screen-space panel. Friction circles are laid out like the car seen from
 /// above, nose up: each ring is that tyre's grip limit, the dot its force.
-pub fn draw_panel(state: &CarState, params: &CarParams) {
-    let (x, y, w, h) = (screen_width() - 300.0, 16.0, 284.0, 380.0);
+pub fn draw_panel(state: &CarState, params: &CarParams, view_w: f32) {
+    let (x, y, w, h) = (view_w - 300.0, 16.0, 284.0, 380.0);
     draw_rectangle(x, y, w, h, theme::PANEL);
     text("TELEMETRY", x + 12.0, y + 24.0, 22.0, theme::NEON_CYAN);
 

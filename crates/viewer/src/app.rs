@@ -24,10 +24,12 @@ pub struct Options {
     pub genome: Option<PathBuf>,
     /// Keep loading the newest best genome as training writes it.
     pub follow: bool,
+    /// Start with the network view open (split).
+    pub net: bool,
 }
 
 impl Options {
-    /// `[--seed N] [--map] [--generator] [--genome path | --follow run] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
+    /// `[--seed N] [--map] [--generator] [--genome path | --follow run] [--net] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
     pub fn from_args() -> Self {
         let mut options = Self::default();
         let mut frames = 240;
@@ -42,6 +44,7 @@ impl Options {
                 "--seed" => options.seed = args.next().and_then(|n| n.parse().ok()),
                 "--map" => options.map_view = true,
                 "--generator" => options.generator = true,
+                "--net" => options.net = true,
                 "--genome" => options.genome = args.next().map(PathBuf::from),
                 "--follow" => {
                     // A run name (runs/<name>/best.genome) or a genome path.

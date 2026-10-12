@@ -6,7 +6,8 @@ use sim::car::{CarParams, CarState};
 
 use super::{text, theme};
 
-pub fn draw(state: &CarState, params: &CarParams) {
+/// `view_w`: width of the track area on screen (the HUD stays inside it).
+pub fn draw(state: &CarState, params: &CarParams, view_w: f32) {
     let h = screen_height();
     let x = 24.0;
 
@@ -21,12 +22,12 @@ pub fn draw(state: &CarState, params: &CarParams) {
 
     draw_tach(state, params, x, h - 66.0, 300.0);
     draw_clutch_temp(state, params, x, h - 50.0, 300.0);
-    draw_inputs(&state.controls, screen_width() - 240.0, h - 160.0);
+    draw_inputs(&state.controls, view_w - 240.0, h - 160.0);
 
     if !state.engine_running() {
         let message = "ENGINE STALLED - clutch in, then Y / Select to restart";
         let width = measure_text(message, None, 30, 1.0).width;
-        text(message, (screen_width() - width) / 2.0, h * 0.4, 30.0, theme::SATURATED);
+        text(message, (view_w - width) / 2.0, h * 0.4, 30.0, theme::SATURATED);
     }
 }
 
@@ -49,14 +50,14 @@ fn draw_clutch_temp(state: &CarState, params: &CarParams, x: f32, y: f32, width:
 }
 
 /// Track name and position along the lap, top centre.
-pub fn draw_track_info(world: &World) {
+pub fn draw_track_info(world: &World, view_w: f32) {
     let track = &world.track;
     let lap = (world.progress / track.length).floor().max(0.0) as u32 + 1;
     let line = format!(
         "{}   lap {lap}   {:.0} / {:.0} m",
         track.def.name, world.place.distance, track.length
     );
-    text(&line, screen_width() / 2.0 - 140.0, 20.0, 18.0, theme::TEXT_DIM);
+    text(&line, view_w / 2.0 - 140.0, 20.0, 18.0, theme::TEXT_DIM);
 }
 
 fn draw_tach(state: &CarState, params: &CarParams, x: f32, y: f32, width: f32) {

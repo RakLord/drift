@@ -11,4 +11,4 @@ pub mod matrix;
 pub mod network;
 
 pub use activation::Activation;
-pub use network::{LayerSpec, Network, NetworkSpec};
+pub use network::{LayerSpec, LayerView, Network, NetworkSpec};

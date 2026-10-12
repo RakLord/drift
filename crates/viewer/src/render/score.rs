@@ -47,8 +47,8 @@ impl ScoreHud {
         self.popups.retain(|p| p.age < POPUP_SECS);
     }
 
-    pub fn draw(&self, scorer: &Scorer) {
-        let cx = screen_width() / 2.0;
+    pub fn draw(&self, scorer: &Scorer, view_w: f32) {
+        let cx = view_w / 2.0;
 
         let total = scorer.total;
         centred(&format_points(total.total()), cx, 70.0, 48.0, theme::TEXT);
