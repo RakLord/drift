@@ -1,6 +1,7 @@
 //! The visual app. For now: drive the car around a track with telemetry.
 
 mod app;
+mod dashboard;
 mod debug;
 mod input;
 mod paths;

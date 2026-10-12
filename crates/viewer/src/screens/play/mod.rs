@@ -67,6 +67,7 @@ pub struct PlayScreen {
     /// A trained genome driving (`--genome`).
     ai: Option<AiDriver>,
     show_inputs: bool,
+    dashboard: crate::dashboard::Dashboard,
     net_view: NetView,
     network_view: NetworkView,
     /// Network decisions already shown in the view.
@@ -142,6 +143,10 @@ impl PlayScreen {
             autopilot: (options.autopilot || options.donut).then(|| Autopilot::new(options.donut)),
             ai,
             show_inputs: false,
+            dashboard: crate::dashboard::Dashboard::new(
+                options.genome.as_ref().and_then(|g| g.parent()).map(|run| run.join("metrics.csv")),
+                options.charts,
+            ),
             net_view,
             network_view: NetworkView::new(),
             seen_decisions: 0,
@@ -176,6 +181,7 @@ impl PlayScreen {
         let dt = dt.min(0.1);
         self.handle_keys();
         self.apply_panel_action();
+        self.dashboard.update(dt);
         self.apply_reloads(dt);
         self.score_hud.update(dt);
         if let Some((_, remaining)) = &mut self.toast {
@@ -260,6 +266,7 @@ impl PlayScreen {
         if self.net_view == NetView::Full {
             self.draw_network_view();
             self.draw_status(screen_width());
+            self.dashboard.draw();
             return;
         }
         let shown = self.interpolated();
@@ -312,6 +319,7 @@ impl PlayScreen {
         if let Some(action) = self.panel.show(&mut self.gen_params, &mut self.gen_seed) {
             self.panel_action = Some(action);
         }
+        self.dashboard.draw();
     }
 
     /// Render pose between the last two ticks, so motion is smooth at any
@@ -443,8 +451,9 @@ impl PlayScreen {
                 Err(err) => self.toast = Some((err, 4.0)),
             }
         }
-        let toggles: [(KeyCode, &mut bool); 8] = [
+        let toggles: [(KeyCode, &mut bool); 9] = [
             (KeyCode::I, &mut self.show_inputs),
+            (KeyCode::C, &mut self.dashboard.open),
             (KeyCode::F, &mut self.panel.open),
             (KeyCode::P, &mut self.paused),
             (KeyCode::E, &mut self.show_effects),
@@ -596,7 +605,7 @@ impl PlayScreen {
             &[
                 "pad: stick steer  RT throttle  LT brake  A/RB handbrake  X/LB clutch  Start reset",
                 "keys: WASD/arrows  Space handbrake  Shift clutch  R reset  P pause  [ ] speed  wheel zoom",
-                "N new track  F generator  L library track  K keep track  M map  E effects  T telemetry  G gamepad  H help",
+                "N new track  F generator  L library track  K keep track  M map  E effects  T telemetry  G gamepad  C run charts  H help",
                 "Y / pad Select: restart a stalled engine   AI (--genome / --follow): Tab take over  I inputs  V network  B newest best",
             ]
         } else {

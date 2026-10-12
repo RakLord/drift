@@ -24,6 +24,8 @@ pub struct Options {
     pub genome: Option<PathBuf>,
     /// Keep loading the newest best genome as training writes it.
     pub follow: bool,
+    /// Start with the run dashboard open.
+    pub charts: bool,
     /// Start with the network view open (split).
     pub net: bool,
 }
@@ -46,6 +48,7 @@ impl Options {
                 "--generator" => options.generator = true,
                 "--net" => options.net = true,
                 "--genome" => options.genome = args.next().map(PathBuf::from),
+                "--charts" => options.charts = true,
                 "--follow" => {
                     // A run name (runs/<name>/best.genome) or a genome path.
                     options.genome = args.next().map(|run| {
