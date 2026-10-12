@@ -96,6 +96,7 @@ rear_torque = 580.0           # per wheel at full pedal
 # Hydraulic drift handbrake: strong enough to lock the rears against the engine
 # even in gear with throttle on. Clutching in still locks faster (no flywheel).
 handbrake_torque = 8000.0     # whole rear axle at full pull
+handbrake_free_play = 0.2     # lever travel before the pads bite, then linear to full
 
 [aero]
 drag = 0.40                   # 0.5 * air density * Cd * frontal area

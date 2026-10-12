@@ -82,8 +82,7 @@ pub struct EpisodeStats {
     pub clutch_slip_time: f64,
     /// Hottest the clutch got, degC.
     pub peak_clutch_temp: f64,
-    /// Seconds with the handbrake pulled, and with the clutch pedal past
-    /// its free play.
+    /// Seconds with the handbrake and the clutch pedal past their free play.
     pub handbrake_time: f64,
     pub clutch_time: f64,
     /// Largest drift angle reached, degrees.
@@ -246,7 +245,7 @@ impl Episode {
         }
         let car = &self.world.car;
         let controls = car.state.controls;
-        if controls.handbrake > 0.1 {
+        if controls.handbrake > car.params.brakes.handbrake_free_play {
             stats.handbrake_time += TICK;
         }
         if controls.clutch > car.params.clutch.free_play {

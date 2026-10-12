@@ -53,7 +53,7 @@ pub fn substep(p: &CarParams, s: &mut CarState, controls: &Controls, ground: &[G
         tyre_force: before[RL].force.x + before[RR].force.x,
         tyre_stiffness: stiffness[RL] + stiffness[RR],
         friction_torque: 2.0 * controls.brake * p.brakes.rear_torque
-            + controls.handbrake * p.brakes.handbrake_torque
+            + p.brakes.handbrake(controls.handbrake)
             + rolling(RL)
             + rolling(RR),
     };

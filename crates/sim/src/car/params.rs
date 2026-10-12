@@ -120,6 +120,7 @@ pub struct BrakeParams {
     pub front_torque: f64,
     pub rear_torque: f64,
     pub handbrake_torque: f64,
+    pub handbrake_free_play: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -158,6 +159,15 @@ impl BodyParams {
         let front_each = weight * self.cg_to_rear_axle() / self.wheelbase / 2.0;
         let rear_each = weight * self.cg_to_front_axle / self.wheelbase / 2.0;
         [front_each, front_each, rear_each, rear_each]
+    }
+}
+
+impl BrakeParams {
+    /// Handbrake torque on the rear axle for a lever position (0..1): nothing
+    /// through the free play, then rising linearly to full.
+    pub fn handbrake(&self, lever: f64) -> f64 {
+        let bite = ((lever - self.handbrake_free_play) / (1.0 - self.handbrake_free_play)).clamp(0.0, 1.0);
+        self.handbrake_torque * bite
     }
 }
 

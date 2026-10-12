@@ -188,6 +188,21 @@ fn handbrake_with_the_clutch_in_locks_the_rears_and_spares_the_engine() {
 }
 
 #[test]
+fn a_slightly_pulled_handbrake_does_nothing() {
+    // Inside the lever's free play the pads don't touch: same as no handbrake.
+    let coast = |handbrake: f64| {
+        let mut car = car_rolling(60.0 * KMH);
+        drive(&mut car, 3.0, |_, _| Controls { throttle: 0.3, handbrake, ..Default::default() });
+        (car.state.speed(), car.state.engine_running())
+    };
+    let free = coast(0.0);
+    let resting = coast(car_at_rest().params.brakes.handbrake_free_play * 0.9);
+    assert_eq!(free, resting);
+    let half = coast(0.6);
+    assert!(half.0 < free.0 - 1.0, "past the free play it should brake");
+}
+
+#[test]
 fn a_quick_handbrake_yank_in_gear_does_not_stall() {
     // In gear the engine's inertia (times the ratio squared) is on the rear
     // axle, so a short pull drops the revs but they recover.
