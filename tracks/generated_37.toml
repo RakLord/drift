@@ -1,0 +1,191 @@
+# Generated from seed 37, kept from the viewer.
+
+version = 1
+name = "Generated 37"
+width = 14.65609264374907
+verge = 8.0
+
+[[anchors]]
+pos = [176.4901270894641, -124.16390929142409]
+left = "hard"
+right = "soft"
+
+[[anchors]]
+pos = [324.8097028281972, 46.479640056372205]
+left = "soft"
+right = "hard"
+
+[[anchors]]
+pos = [212.88036602626119, 105.53349683819023]
+left = "soft"
+right = "soft"
+
+[[anchors]]
+pos = [170.57463418072336, 183.70134315022295]
+left = "soft"
+right = "soft"
+
+[[anchors]]
+pos = [-3.724800223437121, 180.5260740468587]
+left = "soft"
+right = "soft"
+
+[[anchors]]
+pos = [-86.25693328454506, 227.10359955874546]
+left = "soft"
+right = "soft"
+
+[[anchors]]
+pos = [-205.36856369484855, 234.8520195345954]
+left = "soft"
+right = "soft"
+
+[[anchors]]
+pos = [-120.69843792156374, 17.274619573239136]
+left = "soft"
+right = "soft"
+
+[[anchors]]
+pos = [-220.7114638674037, -61.360705248697414]
+left = "hard"
+right = "soft"
+
+[[anchors]]
+pos = [-216.10572813531954, -249.3784925494343]
+left = "soft"
+right = "soft"
+
+[[anchors]]
+pos = [-38.0460032964949, -153.3476164139863]
+left = "hard"
+right = "soft"
+
+[[anchors]]
+pos = [38.812588108676124, -247.04210561672062]
+left = "soft"
+right = "soft"
+
+[[anchors]]
+pos = [171.88731831947402, -272.7200323162975]
+left = "soft"
+right = "soft"
+
+[[zones]]
+kind = "clip"
+at = 1.088888888888889
+side = "left"
+
+[[zones]]
+kind = "outer"
+from = 0.8354978354978355
+to = 1.4296296296296294
+side = "right"
+
+[[zones]]
+kind = "clip"
+at = 2.0434782608695654
+side = "right"
+
+[[zones]]
+kind = "outer"
+from = 1.8648148148148147
+to = 2.3842391304347825
+side = "left"
+
+[[zones]]
+kind = "clip"
+at = 2.9239130434782608
+side = "left"
+
+[[zones]]
+kind = "outer"
+from = 2.8016304347826084
+to = 3.2917613636363634
+side = "right"
+
+[[zones]]
+kind = "clip"
+at = 4.052083333333333
+side = "right"
+
+[[zones]]
+kind = "clip"
+at = 5.908396946564885
+side = "left"
+
+[[zones]]
+kind = "outer"
+from = 5.788167938931297
+to = 6.302301255230125
+side = "right"
+
+[[zones]]
+kind = "clip"
+at = 7.06015037593985
+side = "right"
+
+[[zones]]
+kind = "outer"
+from = 6.867154811715481
+to = 7.416917293233083
+side = "left"
+
+[[zones]]
+kind = "clip"
+at = 7.947368421052632
+side = "left"
+
+[[zones]]
+kind = "outer"
+from = 7.7406015037593985
+to = 8.027093596059114
+side = "right"
+
+[[zones]]
+kind = "clip"
+at = 9.070422535211268
+side = "left"
+
+[[zones]]
+kind = "outer"
+from = 8.75
+to = 9.36643192488263
+side = "right"
+
+[[zones]]
+kind = "clip"
+at = 10.063492063492063
+side = "right"
+
+[[zones]]
+kind = "outer"
+from = 9.854460093896714
+to = 10.43968253968254
+side = "left"
+
+[[zones]]
+kind = "clip"
+at = 10.952380952380953
+side = "left"
+
+[[zones]]
+kind = "clip"
+at = 12.064935064935066
+side = "left"
+
+[[zones]]
+kind = "outer"
+from = 11.692708333333332
+to = 12.41396103896104
+side = "right"
+
+[[zones]]
+kind = "clip"
+at = 12.96103896103896
+side = "right"
+
+[[zones]]
+kind = "outer"
+from = 12.840909090909092
+to = 0.2056277056277052
+side = "left"

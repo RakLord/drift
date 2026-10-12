@@ -5,7 +5,10 @@
 pub mod bezier;
 pub mod boundary;
 pub mod centreline;
+pub mod corners;
+pub mod crossings;
 pub mod def;
+pub mod generator;
 pub mod grid;
 pub mod zones;
 
@@ -19,6 +22,9 @@ pub use boundary::{Segment, SegmentKind, Side};
 use centreline::Sample;
 pub use def::{EdgeKind, TrackDef};
 use def::FORMAT_VERSION;
+pub use corners::Corner;
+pub use crossings::Crossing;
+use crossings::Centreline;
 pub use grid::RayHit;
 pub use zones::{Zone, ZoneKind};
 use grid::SegmentGrid;
@@ -36,6 +42,16 @@ pub struct Track {
     pub length: f64,
     pub segments: Vec<Segment>,
     pub zones: Vec<Zone>,
+    /// Corners in driving order, annotated with their zones and edges.
+    pub corners: Vec<Corner>,
+    /// Flat crossroads where the track crosses itself.
+    pub crossings: Vec<Crossing>,
+    /// Per sample, `[left, right]`: boundary points that lie on another road
+    /// at a crossing (see `edge_present` / `fence_present`).
+    edge_open: Vec<[bool; 2]>,
+    fence_open: Vec<[bool; 2]>,
+    centre: Centreline,
+    section_starts: Vec<f64>,
     grid: SegmentGrid,
 }
 
@@ -58,6 +74,8 @@ pub enum TrackError {
     TooFewAnchors,
     TooTight { distance: f64, radius: f64, needed: f64 },
     SelfIntersecting { at: Vec2 },
+    ShallowCrossing { at: Vec2, angle: f64 },
+    TooClose { at: Vec2 },
     Zone(String),
 }
 
@@ -70,6 +88,15 @@ impl fmt::Display for TrackError {
                 write!(f, "corner at {distance:.0} m has radius {radius:.1} m, needs at least {needed:.1} m")
             }
             Self::SelfIntersecting { at } => write!(f, "boundaries cross near ({:.0}, {:.0})", at.x, at.y),
+            Self::ShallowCrossing { at, angle } => write!(
+                f,
+                "track crosses itself at only {:.0} degrees near ({:.0}, {:.0}), needs at least {:.0}",
+                angle.to_degrees(),
+                at.x,
+                at.y,
+                crossings::MIN_CROSSING_ANGLE.to_degrees()
+            ),
+            Self::TooClose { at } => write!(f, "two parts of the track run too close near ({:.0}, {:.0})", at.x, at.y),
             Self::Zone(message) => write!(f, "zone: {message}"),
         }
     }
@@ -98,11 +125,34 @@ impl Track {
             }
         }
 
-        let segments = boundary::build(&samples, half_width, def.verge, edge);
+        let reach = half_width + def.verge;
+        let centre = Centreline::new(&samples, length, reach);
+        let crossings = crossings::find(&samples, &centre, reach)
+            .map_err(|(at, angle)| TrackError::ShallowCrossing { at, angle })?;
+        crossings::check_clearance(&samples, &centre, &crossings, reach).map_err(|at| TrackError::TooClose { at })?;
+        let (edge_open, fence_open) = crossings::open_points(&samples, &centre, half_width, def.verge, edge);
+
+        let segments = boundary::build(&samples, half_width, def.verge, edge, &edge_open, &fence_open);
         let grid = SegmentGrid::build(&segments);
         let zones = zones::resolve(&def, &samples, length).map_err(|e| TrackError::Zone(e.0))?;
-        let track = Self { def, samples, length, segments, zones, grid };
+        let section_starts = zones::section_starts(&samples, def.anchors.len()).map_err(|e| TrackError::Zone(e.0))?;
+        let corners = corners::find(&samples, length);
+        let mut track = Self {
+            def,
+            samples,
+            length,
+            segments,
+            zones,
+            corners,
+            crossings,
+            edge_open,
+            fence_open,
+            centre,
+            section_starts,
+            grid,
+        };
         track.check_intersections()?;
+        track.annotate_corners();
         Ok(track)
     }
 
@@ -156,10 +206,24 @@ impl Track {
         TrackPoint { index: best, distance, offset: (point - nearest.position).dot(nearest.normal()), tangent: nearest.tangent }
     }
 
+    /// Whether the painted edge / barrier between samples `i` and `i + 1`
+    /// on `side` exists (it's left out where it would sit on another road at
+    /// a crossing).
+    pub fn edge_present(&self, i: usize, side: Side) -> bool {
+        let (j, k) = ((i + 1) % self.samples.len(), side_index(side));
+        !(self.edge_open[i][k] && self.edge_open[j][k])
+    }
+
+    /// Like `edge_present`, for the fence behind a verge.
+    pub fn fence_present(&self, i: usize, side: Side) -> bool {
+        let (j, k) = ((i + 1) % self.samples.len(), side_index(side));
+        !(self.fence_open[i][k] && self.fence_open[j][k])
+    }
+
     /// What a tyre at `point` is standing on.
     pub fn ground_at(&self, point: Vec2, hint: Option<usize>) -> Ground {
         let p = self.project(point, hint);
-        if p.offset.abs() <= self.half_width() {
+        if p.offset.abs() <= self.half_width() || self.centre.on_other_asphalt(point, p.index, self.half_width()) {
             return Ground::ASPHALT;
         }
         let side = if p.offset > 0.0 { Side::Left } else { Side::Right };
@@ -210,20 +274,76 @@ impl Track {
         angle_diff(self.heading_at(index), heading)
     }
 
+    /// Section coordinate (anchor index + fraction) of a track distance.
+    pub fn section_coordinate(&self, distance: f64) -> f64 {
+        zones::section_coordinate(&self.section_starts, self.length, distance)
+    }
+
+    /// Fill in each corner's clip, outer zone coverage and wall sides.
+    fn annotate_corners(&mut self) {
+        let n = self.samples.len();
+        let spacing = self.length / n as f64;
+        for i in 0..self.corners.len() {
+            let c = self.corners[i];
+            let inside = if c.direction > 0.0 { Side::Left } else { Side::Right };
+            let outside = if inside == Side::Left { Side::Right } else { Side::Left };
+            let span = (c.exit + n - c.entry) % n + 1;
+            let indices = || (0..span).map(|k| (c.entry + k) % n);
+            let hard_share =
+                |side: Side| indices().filter(|&j| self.edge(j, side) == EdgeKind::Hard).count() as f64 / span as f64;
+            let length = c.length(self.length).max(spacing);
+
+            let clip = self
+                .zones
+                .iter()
+                .filter(|z| z.kind == ZoneKind::Clip && z.side == inside && self.in_range(z.start, c.start, c.end))
+                .map(|z| (z.start - c.start).rem_euclid(self.length) / length)
+                .next();
+            let covered = indices()
+                .filter(|&j| {
+                    let d = self.samples[j].distance;
+                    self.zones
+                        .iter()
+                        .any(|z| z.kind == ZoneKind::Outer && z.side == outside && self.in_range(d, z.start, z.end))
+                })
+                .count();
+
+            let (inside_hard, outside_hard) = (hard_share(inside) > 0.5, hard_share(outside) > 0.5);
+
+            let corner = &mut self.corners[i];
+            corner.clip = clip;
+            corner.outer_coverage = covered as f64 / span as f64;
+            corner.inside_hard = inside_hard;
+            corner.outside_hard = outside_hard;
+        }
+    }
+
+    /// Boundaries must never cross, except where they meet at a crossroads.
     fn check_intersections(&self) -> Result<(), TrackError> {
         let mut nearby = vec![];
+        let at_crossing = |s: &Segment| crossings::near_crossing((s.a + s.b) / 2.0, &self.crossings);
         for (i, s) in self.segments.iter().enumerate() {
+            if at_crossing(s) {
+                continue;
+            }
             let lo = Vec2::new(s.a.x.min(s.b.x), s.a.y.min(s.b.y));
             let hi = Vec2::new(s.a.x.max(s.b.x), s.a.y.max(s.b.y));
             self.grid.query(lo, hi, &mut nearby);
             for &j in &nearby {
                 let j = j as usize;
-                if j > i && boundary::intersects(s, &self.segments[j]) {
+                if j > i && !at_crossing(&self.segments[j]) && boundary::intersects(s, &self.segments[j]) {
                     return Err(TrackError::SelfIntersecting { at: s.a });
                 }
             }
         }
         Ok(())
+    }
+}
+
+fn side_index(side: Side) -> usize {
+    match side {
+        Side::Left => 0,
+        Side::Right => 1,
     }
 }
 
@@ -257,7 +377,7 @@ mod tests {
             name: "oval".into(),
             width: 12.0,
             verge: 8.0,
-            anchors: points.iter().map(|&(pos, handle)| AnchorDef { pos, handle: Some(handle), left, right }).collect(),
+            anchors: points.iter().map(|&(pos, handle)| AnchorDef { pos, handle: Some(handle), handle_in: None, left, right }).collect(),
             zones: vec![],
         }
     }

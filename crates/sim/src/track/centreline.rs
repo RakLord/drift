@@ -93,6 +93,7 @@ mod tests {
                 AnchorDef {
                     pos: [radius * a.cos(), radius * a.sin()],
                     handle: None,
+                    handle_in: None,
                     left: EdgeKind::Soft,
                     right: EdgeKind::Soft,
                 }

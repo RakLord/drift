@@ -650,6 +650,7 @@ dependencies = [
  "common",
  "gilrs",
  "macroquad",
+ "serde",
  "sim",
  "toml",
 ]

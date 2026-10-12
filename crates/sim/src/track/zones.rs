@@ -27,19 +27,33 @@ pub struct Zone {
 #[derive(Debug)]
 pub struct ZoneError(pub String);
 
-/// Resolve every zone in `def` against the sampled centreline.
-pub fn resolve(def: &TrackDef, samples: &[Sample], length: f64) -> Result<Vec<Zone>, ZoneError> {
-    let sections = def.anchors.len();
-    // Distance at which each section starts.
+/// Distance along the track at which each section starts.
+pub fn section_starts(samples: &[Sample], sections: usize) -> Result<Vec<f64>, ZoneError> {
     let mut starts = vec![f64::NAN; sections];
     for s in samples {
         if starts[s.section].is_nan() {
             starts[s.section] = s.distance;
         }
     }
-    if let Some(i) = starts.iter().position(|d| d.is_nan()) {
-        return Err(ZoneError(format!("section {i} is too short to hold a zone")));
+    match starts.iter().position(|d| d.is_nan()) {
+        Some(i) => Err(ZoneError(format!("section {i} is too short to hold a zone"))),
+        None => Ok(starts),
     }
+}
+
+/// Section coordinate (anchor index + fraction) of a track distance. The
+/// inverse of how zone positions are resolved.
+pub fn section_coordinate(starts: &[f64], length: f64, distance: f64) -> f64 {
+    let distance = distance.rem_euclid(length);
+    let index = starts.iter().rposition(|&s| s <= distance).unwrap_or(0);
+    let end = starts.get(index + 1).copied().unwrap_or(length);
+    index as f64 + ((distance - starts[index]) / (end - starts[index])).clamp(0.0, 0.999)
+}
+
+/// Resolve every zone in `def` against the sampled centreline.
+pub fn resolve(def: &TrackDef, samples: &[Sample], length: f64) -> Result<Vec<Zone>, ZoneError> {
+    let sections = def.anchors.len();
+    let starts = section_starts(samples, sections)?;
     let to_distance = |at: f64| -> Result<f64, ZoneError> {
         if !(0.0..sections as f64).contains(&at) {
             return Err(ZoneError(format!("zone position {at} is outside sections 0..{sections}")));

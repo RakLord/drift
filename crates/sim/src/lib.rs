@@ -6,6 +6,7 @@
 pub mod car;
 pub mod controls;
 pub mod scoring;
+pub mod sensors;
 pub mod track;
 pub mod world;
 

@@ -26,6 +26,10 @@ struct Slice {
     /// Back of the verge (fence line), left then right.
     fence: [Vec2; 2],
     kind: [EdgeKind; 2],
+    /// Whether the edge / fence from this slice to the next exists (they're
+    /// left out across crossroads).
+    edge_present: [bool; 2],
+    fence_present: [bool; 2],
 }
 
 /// A judged zone, ready to draw.
@@ -64,6 +68,8 @@ impl TrackMesh {
                     edge: SIDES.map(|side| s.position + n * (side.sign() * half)),
                     fence: SIDES.map(|side| s.position + n * (side.sign() * (half + verge))),
                     kind: SIDES.map(|side| track.edge(i, side)),
+                    edge_present: SIDES.map(|side| track.edge_present(i, side)),
+                    fence_present: SIDES.map(|side| track.fence_present(i, side)),
                 }
             })
             .collect();
@@ -114,13 +120,18 @@ impl TrackMesh {
                 let inset_b = b.normal * (-sign * PAINT_INSET);
                 match a.kind[side] {
                     EdgeKind::Soft => {
-                        draw_segment(a.edge[side] + inset, b.edge[side] + inset_b, PAINT_WIDTH, theme::EDGE_PAINT);
-                        draw_segment(a.fence[side], b.fence[side], 0.12, theme::FENCE);
-                        if i % FENCE_POST_EVERY == 0 {
-                            let p = to_mq(a.fence[side]);
-                            draw_circle(p.x, p.y, 0.15, theme::FENCE);
+                        if a.edge_present[side] {
+                            draw_segment(a.edge[side] + inset, b.edge[side] + inset_b, PAINT_WIDTH, theme::EDGE_PAINT);
+                        }
+                        if a.fence_present[side] {
+                            draw_segment(a.fence[side], b.fence[side], 0.12, theme::FENCE);
+                            if i % FENCE_POST_EVERY == 0 {
+                                let p = to_mq(a.fence[side]);
+                                draw_circle(p.x, p.y, 0.15, theme::FENCE);
+                            }
                         }
                     }
+                    EdgeKind::Hard if !a.edge_present[side] => {}
                     EdgeKind::Hard => {
                         let out_a = a.edge[side] + a.normal * (sign * WALL_THICKNESS);
                         let out_b = b.edge[side] + b.normal * (sign * WALL_THICKNESS);

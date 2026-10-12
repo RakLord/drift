@@ -26,8 +26,8 @@ impl CubicBezier {
 
 /// One curve per anchor, from it to the next (wrapping), in driving order.
 ///
-/// Explicit handles are mirrored, so the curve is smooth through the anchor.
-/// Automatic handles point along the line from the previous anchor to the
+/// An explicit handle is mirrored for the incoming side unless `handle_in` is
+/// given too. Automatic handles point along the line from the previous anchor to the
 /// next, each a third of its own section's length, which avoids overshoot
 /// when anchors are unevenly spaced.
 pub fn curves(anchors: &[AnchorDef]) -> Vec<CubicBezier> {
@@ -38,8 +38,9 @@ pub fn curves(anchors: &[AnchorDef]) -> Vec<CubicBezier> {
             let (prev, here, next) = (pos(i + n - 1), pos(i), pos(i + 1));
             match anchors[i].handle {
                 Some([x, y]) => {
-                    let h = Vec2::new(x, y);
-                    (-h, h)
+                    let out = Vec2::new(x, y);
+                    let incoming = anchors[i].handle_in.map_or(-out, |[x, y]| Vec2::new(x, y));
+                    (incoming, out)
                 }
                 None => {
                     let dir = (next - prev).normalize_or_zero();

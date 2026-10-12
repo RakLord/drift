@@ -15,8 +15,11 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
   - wall collisions (`sim/world`)
   - track rendering, sparks, cosmetic bumper damage
   - zones and scoring (`sim/scoring`, `config/scoring.toml`), score HUD with popups
-  - track, car and scoring files all hot-reload in the viewer
-- Next: procedural generator, driver prep.
+  - corner analysis (`track/corners.rs`) and driver prep (`sim/sensors/driver_prep.rs`)
+  - procedural drift-track generator with figure-8 crossroads (`track/generator/`, `track/crossings.rs`, `config/generator.toml`)
+  - viewer: `N` new track, `F` generator panel (sliders, save as defaults), `K` keep track, `M` map view
+  - track, car, scoring and generator files all hot-reload in the viewer
+- Next: M1 is feature-complete apart from tuning. M2 (NN + GA + headless trainer) follows.
 
 **Conventions**
 - The sim uses `f64` (SI units). The NN will use `f32`.
@@ -29,7 +32,8 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 **Commands**
 - `cargo run -p viewer`: drive (`H` in-app for controls)
 - `cargo test -p sim --test physics -- --nocapture --test-threads=1`: physics numbers
-- `cargo run -p viewer -- --screenshot out.png --frames 420 --autopilot`: render a scripted drift to PNG (dev check for visuals)
+- `cargo run -p viewer -- --screenshot out.png --frames 420 --autopilot`: render a scripted lap to PNG (dev check for visuals)
+- `cargo run -p viewer -- --seed 7 --map`: open generated track 7 in map view
 
 **Tuning notes**
 - It feels a little icy on keyboard. Retest on gamepad before tuning.
@@ -74,7 +78,7 @@ Good driving and drift physics is what gives this project value. The GA will als
   - analog clutch that slips under speed difference
   - single fixed ratio (no gearbox in v1)
   - locked or welded diff, as on real drift cars
-- **Steering and brakes:** high-lock steering (~60°) with a rate limit; front-biased foot brake; hydraulic handbrake on the rears.
+- **Steering and brakes:** high-lock steering (~60°) with a rate limit; front-biased foot brake (full pedal just under lock-up in a straight line); hydraulic handbrake on the rears. No driver aids: no ABS, no steering assist, no auto-clutch.
 - **Resistance:** aero drag and rolling resistance.
 - **Integration:** 120 Hz tick, with tyre/wheel substeps if they turn out to be needed for stability (we'll measure).
 
@@ -109,12 +113,13 @@ Good driving and drift physics is what gives this project value. The GA will als
   - Overlap is fixed by correcting position (never adds energy).
   - Light taps only nudge the car; hard hits spin it.
   - Impacts emit contact events (point, normal, speed) for sparks, debris, and cosmetic bumper damage (bumpers rip off).
-- **Procedural generator (v1):**
-  1. Place random control points around a loop.
-  2. Derive smooth handles.
-  3. Reject tracks that self-intersect or have corners that are too tight.
-  4. Auto-place zones: clip points at apexes, outer zones on long corners.
-  5. Tracks can also be run mirrored or reversed.
+- **Procedural generator:** builds drift-style tracks from corner pieces, then closes the loop with the shortest smooth path back to the start.
+  - The defaults are tuned for compact, constantly turning courses: no straight over ~60 m, about 10 corners per km, figure-8s by default.
+  - When a seed can't produce a valid track, the generator reports the most common rejection reasons, with the setting to change for each.
+  - **Pieces:** hairpin, sweeper, S-bend (transition), decreasing radius, chicane/manji, kink, with straights between.
+  - **Figure-8s:** tracks may cross themselves as **flat crossroads**. Boundaries are opened where they'd sit on the other road. Crossings must be ≥ 35°; parallel overlaps are rejected.
+  - **Edges and zones** are assigned from the corner analysis, with no zones at crossroads.
+  - **Tuning:** everything is in `config/generator.toml`, and editable live in the viewer's generator panel (`F`), which can save it back.
 - **Track library:** about 15 approved tracks, saved to disk. A good generated track can be approved into the library. Some library tracks are held out as **test tracks** that are never trained on.
 - **Bezier editor:** later, not v1.
 

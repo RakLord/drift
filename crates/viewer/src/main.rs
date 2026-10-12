@@ -6,6 +6,7 @@ mod input;
 mod paths;
 mod render;
 mod screens;
+mod ui;
 
 use macroquad::prelude::*;
 

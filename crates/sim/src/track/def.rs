@@ -42,10 +42,13 @@ pub enum ZoneDef {
 #[serde(deny_unknown_fields)]
 pub struct AnchorDef {
     pub pos: [f64; 2],
-    /// Outgoing Bezier handle, relative to `pos`. The incoming handle mirrors
-    /// it. Omit for an automatic smooth handle.
+    /// Outgoing Bezier handle, relative to `pos`. Omit for an automatic
+    /// smooth handle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handle: Option<[f64; 2]>,
+    /// Incoming handle, relative to `pos`. Omit to mirror `handle`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle_in: Option<[f64; 2]>,
     /// Edges of the section starting here, relative to the driving direction.
     pub left: EdgeKind,
     pub right: EdgeKind,

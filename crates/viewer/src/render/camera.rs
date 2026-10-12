@@ -27,6 +27,15 @@ impl FollowCamera {
         self.pixels_per_metre += (wanted - self.pixels_per_metre) * (1.0 - (-dt * 2.0).exp());
     }
 
+    /// Frame a whole area (map view), immediately.
+    pub fn show_area(&mut self, min: Vec2, max: Vec2) {
+        self.center = (min + max) / 2.0;
+        let size = max - min;
+        let fit_x = f64::from(screen_width()) / size.x.max(1.0);
+        let fit_y = f64::from(screen_height()) / size.y.max(1.0);
+        self.pixels_per_metre = fit_x.min(fit_y);
+    }
+
     pub fn snap_to(&mut self, target: Vec2) {
         self.center = target;
     }

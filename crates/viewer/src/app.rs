@@ -10,12 +10,18 @@ use crate::screens::play::PlayScreen;
 pub struct Options {
     /// Dev tool: save a PNG after this many frames, then exit.
     pub screenshot: Option<(PathBuf, u32)>,
-    /// Dev tool: a scripted driver initiates and holds a drift.
+    /// Dev tool: a scripted driver laps the track.
     pub autopilot: bool,
+    /// Start on the generated track for this seed instead of the library track.
+    pub seed: Option<u64>,
+    /// Start in map view.
+    pub map_view: bool,
+    /// Start with the generator panel open.
+    pub generator: bool,
 }
 
 impl Options {
-    /// `--screenshot <path> [--frames N] [--autopilot]`
+    /// `[--seed N] [--map] [--generator] [--screenshot <path> [--frames N]] [--autopilot]`
     pub fn from_args() -> Self {
         let mut options = Self::default();
         let mut frames = 240;
@@ -26,6 +32,9 @@ impl Options {
                 "--screenshot" => path = args.next().map(PathBuf::from),
                 "--frames" => frames = args.next().and_then(|n| n.parse().ok()).unwrap_or(frames),
                 "--autopilot" => options.autopilot = true,
+                "--seed" => options.seed = args.next().and_then(|n| n.parse().ok()),
+                "--map" => options.map_view = true,
+                "--generator" => options.generator = true,
                 other => eprintln!("ignoring unknown argument {other}"),
             }
         }
@@ -48,7 +57,7 @@ pub struct App {
 
 impl App {
     pub fn new(options: Options) -> Self {
-        let play = PlayScreen::new(options.autopilot);
+        let play = PlayScreen::new(&options);
         Self { options, play, frame: 0 }
     }
 

@@ -36,6 +36,7 @@ pub const SKID: Color = rgb(6, 6, 8);
 pub const TEXT: Color = rgb(230, 230, 236);
 pub const TEXT_DIM: Color = rgb(140, 144, 160);
 pub const PANEL: Color = rgba(10, 12, 18, 200);
+pub const PANEL_SOLID: Color = rgba(12, 14, 20, 245);
 pub const NEON_PINK: Color = rgb(255, 46, 136);
 pub const NEON_CYAN: Color = rgb(0, 229, 255);
 pub const SODIUM: Color = rgb(255, 170, 60);

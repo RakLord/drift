@@ -53,11 +53,22 @@ impl Side {
 }
 
 /// Build every boundary segment. `edge(i, side)` gives the edge kind at
-/// sample `i`.
-pub fn build(samples: &[Sample], half_width: f64, verge: f64, edge: impl Fn(usize, Side) -> EdgeKind) -> Vec<Segment> {
+/// sample `i`. `edge_open` / `fence_open` (per sample, `[left, right]`) mark
+/// boundary points that lie on another road at a crossing: a segment is left
+/// out when both its ends are open.
+pub fn build(
+    samples: &[Sample],
+    half_width: f64,
+    verge: f64,
+    edge: impl Fn(usize, Side) -> EdgeKind,
+    edge_open: &[[bool; 2]],
+    fence_open: &[[bool; 2]],
+) -> Vec<Segment> {
     let n = samples.len();
     let mut segments = Vec::with_capacity(n * 3);
-    for side in [Side::Left, Side::Right] {
+    for (k, side) in [Side::Left, Side::Right].into_iter().enumerate() {
+        let edge_here = |i: usize, j: usize| !(edge_open[i][k] && edge_open[j][k]);
+        let fence_here = |i: usize, j: usize| !(fence_open[i][k] && fence_open[j][k]);
         let offset_point = |i: usize, offset: f64| samples[i].position + samples[i].normal() * (side.sign() * offset);
         // Facing back towards the centreline.
         let inward = |i: usize| samples[i].normal() * -side.sign();
@@ -67,19 +78,24 @@ pub fn build(samples: &[Sample], half_width: f64, verge: f64, edge: impl Fn(usiz
             let edge_a = offset_point(i, half_width);
             let edge_b = offset_point(j, half_width);
             match edge(i, side) {
-                EdgeKind::Hard => {
+                EdgeKind::Hard if edge_here(i, j) => {
                     segments.push(Segment { a: edge_a, b: edge_b, normal, kind: SegmentKind::HardWall });
                 }
+                EdgeKind::Hard => {}
                 EdgeKind::Soft => {
-                    segments.push(Segment { a: edge_a, b: edge_b, normal, kind: SegmentKind::SoftEdge });
-                    let fence_a = offset_point(i, half_width + verge);
-                    let fence_b = offset_point(j, half_width + verge);
-                    segments.push(Segment { a: fence_a, b: fence_b, normal, kind: SegmentKind::Fence });
+                    if edge_here(i, j) {
+                        segments.push(Segment { a: edge_a, b: edge_b, normal, kind: SegmentKind::SoftEdge });
+                    }
+                    if fence_here(i, j) {
+                        let fence_a = offset_point(i, half_width + verge);
+                        let fence_b = offset_point(j, half_width + verge);
+                        segments.push(Segment { a: fence_a, b: fence_b, normal, kind: SegmentKind::Fence });
+                    }
                 }
             }
             // Close the verge where the edge kind changes at sample j.
             let (before, after) = (edge(i, side), edge(j, side));
-            if before != after {
+            if before != after && !(edge_open[j][k] && fence_open[j][k]) {
                 // The verge lies ahead if it starts here, behind if it ends.
                 let into_verge = if after == EdgeKind::Soft { samples[j].tangent } else { -samples[j].tangent };
                 segments.push(Segment {
