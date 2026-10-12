@@ -8,6 +8,7 @@ pub mod ground;
 pub mod hud;
 pub mod score;
 pub mod theme;
+pub mod thumb;
 pub mod track;
 
 use common::Vec2;

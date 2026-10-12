@@ -308,13 +308,38 @@ impl Panel {
     }
 }
 
-fn inside(x: f32, y: f32, w: f32, h: f32) -> bool {
+/// A button anywhere on screen (outside a panel). Returns true when clicked.
+pub fn button(r: Rect, label: &str, style: ButtonStyle) -> bool {
+    let hot = inside(r.x, r.y, r.w, r.h);
+    let (fill, ink) = match (style, hot) {
+        (ButtonStyle::Primary, false) => (theme::NEON_PINK, WHITE),
+        (ButtonStyle::Primary, true) => (WHITE, theme::NEON_PINK),
+        (ButtonStyle::Normal, false) => (theme::GRID_MAJOR, theme::TEXT),
+        (ButtonStyle::Normal, true) => (theme::NEON_CYAN, theme::ASPHALT),
+    };
+    draw_rectangle(r.x, r.y, r.w, r.h, fill);
+    let shown = fit(label, r.w - 8.0, TEXT_SIZE);
+    let tw = measure_text(&shown, None, TEXT_SIZE as u16, 1.0).width;
+    text(&shown, r.x + (r.w - tw) / 2.0, r.y + r.h / 2.0 + 6.0, TEXT_SIZE, ink);
+    hot && is_mouse_button_pressed(MouseButton::Left)
+}
+
+/// A small filled tag ("FIXED", "POOL") at (x, y), the top-left. Returns its
+/// width.
+pub fn chip(x: f32, y: f32, label: &str, color: Color) -> f32 {
+    let w = measure_text(label, None, 14, 1.0).width + 10.0;
+    draw_rectangle(x, y, w, 18.0, color);
+    text(label, x + 5.0, y + 13.0, 14.0, theme::ASPHALT);
+    w
+}
+
+pub fn inside(x: f32, y: f32, w: f32, h: f32) -> bool {
     let (mx, my) = mouse_position();
     mx >= x && mx <= x + w && my >= y && my <= y + h
 }
 
 /// Shorten `s` with a trailing ".." until it fits in `width` pixels.
-fn fit(s: &str, width: f32, size: f32) -> String {
+pub fn fit(s: &str, width: f32, size: f32) -> String {
     let fits = |t: &str| measure_text(t, None, size as u16, 1.0).width <= width;
     if fits(s) {
         return s.to_owned();

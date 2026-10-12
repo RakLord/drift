@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use sim::track::{Track, TrackDef};
+use sim::track::{Track, TrackDef, TrackStats};
 
 #[test]
 fn library_tracks_build() {
@@ -13,7 +13,22 @@ fn library_tracks_build() {
         if path.extension().is_some_and(|e| e == "toml") {
             let def = TrackDef::load(&path).unwrap_or_else(|e| panic!("{e}"));
             let track = Track::build(def).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-            println!("{}: {:.0} m, {} segments", path.display(), track.length, track.segments.len());
+            let stats = TrackStats::of(&track);
+            println!(
+                "{}: {:.0} m, {} segments, {} corners ({:.1}/km), sharpest r {:.0} m, {} hairpins, {} crossings, {:.0}% hard",
+                path.display(),
+                track.length,
+                track.segments.len(),
+                stats.corners,
+                stats.corners_per_km,
+                stats.sharpest.unwrap_or(f64::NAN),
+                stats.hairpins,
+                stats.crossings,
+                stats.hard_share * 100.0
+            );
+            assert_eq!(stats.corners, track.corners.len());
+            assert!((0.0..=1.0).contains(&stats.hard_share));
+            assert!(stats.hairpins <= stats.corners);
             for c in &track.corners {
                 println!(
                     "  {} {:>3.0} deg  r {:>4.0} m  at {:>4.0}-{:>4.0} m  clip {:?}  outer {:.0}%  walls in/out {}/{}",
@@ -37,12 +52,18 @@ fn library_tracks_build() {
 #[test]
 fn driver_prep_counts_down_to_the_next_corner() {
     use sim::sensors::driver_prep::{features, upcoming};
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tracks/test_loop.toml");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/default_track.toml");
     let track = Track::build(TrackDef::load(path).unwrap()).unwrap();
     let first = track.corners[0];
 
-    let before = upcoming(&track, first.start - 50.0)[0].unwrap();
-    assert!((before.distance_to - 50.0).abs() < 1.0 && before.progress == 0.0);
+    // Halfway along the longest straight, the corner after it is next.
+    let n = track.corners.len();
+    let (next, gap) = (0..n)
+        .map(|i| (i, (track.corners[i].start - track.corners[(i + n - 1) % n].end).rem_euclid(track.length)))
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .unwrap();
+    let before = upcoming(&track, track.corners[next].start - gap / 2.0)[0].unwrap();
+    assert!((before.distance_to - gap / 2.0).abs() < 1.0 && before.progress == 0.0, "{before:?}, gap {gap:.0} m");
 
     let inside = upcoming(&track, first.start + first.length(track.length) / 2.0)[0].unwrap();
     assert_eq!(inside.distance_to, 0.0);
@@ -65,8 +86,9 @@ fn driver_prep_counts_down_to_the_next_corner() {
 
 #[test]
 fn skidpad_is_not_a_test_track_but_courses_are() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tracks");
-    let load = |name: &str| TrackDef::load(dir.join(name)).unwrap();
-    assert!(!load("skidpad.toml").test);
-    assert!(load("test_loop.toml").test, "tracks are test tracks unless they opt out");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let load = |path: &str| TrackDef::load(root.join(path)).unwrap();
+    assert!(!load("tracks/skidpad.toml").test);
+    // The default track has no `test` line.
+    assert!(load("config/default_track.toml").test, "tracks are test tracks unless they opt out");
 }

@@ -13,8 +13,12 @@ use crate::paths::workspace_file;
 
 const POLL_SECS: f64 = 0.5;
 
-pub const LIBRARY_TRACK: &str = "tracks/test_loop.toml";
-const BUILT_IN_TRACK: &str = include_str!("../../../../../tracks/test_loop.toml");
+/// The library track to start on, if it's there.
+pub const START_TRACK: &str = "tracks/generated_1.toml";
+/// The default track (outside the library, so it can't be deleted): the
+/// start track when `START_TRACK` is gone, and built in as the fallback.
+pub const DEFAULT_TRACK: &str = "config/default_track.toml";
+const BUILT_IN_TRACK: &str = include_str!("../../../../../config/default_track.toml");
 
 /// Something that changed on disk.
 pub enum Reload {
@@ -67,11 +71,12 @@ impl Configs {
     /// Load everything, recording a warning for anything that fell back to
     /// its built-in default. `track` replaces the default library track.
     pub fn load(track: Option<&str>, warnings: &mut Vec<String>) -> Self {
+        let start = if workspace_file(START_TRACK).exists() { START_TRACK } else { DEFAULT_TRACK };
         Self {
             car: Watched::load("car", "config/car.toml", CarParams::default, warnings),
             scoring: Watched::load("scoring", "config/scoring.toml", ScoringParams::default, warnings),
-            track: Watched::load("track", track.unwrap_or(LIBRARY_TRACK), built_in_track, warnings),
-            track_path: workspace_file(track.unwrap_or(LIBRARY_TRACK)),
+            track: Watched::load("track", track.unwrap_or(start), built_in_track, warnings),
+            track_path: workspace_file(track.unwrap_or(start)),
             generator: Watched::load("generator", "config/generator.toml", GeneratorParams::default, warnings),
             timer: 0.0,
         }

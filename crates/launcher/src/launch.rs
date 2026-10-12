@@ -48,6 +48,18 @@ impl Children {
     }
 }
 
+/// Open the viewer and wait for it to close (output to `target/viewer.log`).
+pub fn viewer_and_wait(args: &[String]) -> Result<(), String> {
+    build("viewer", false)?;
+    let log = File::create(paths::target().join("viewer.log")).map_err(|e| e.to_string())?;
+    let mut child = spawn(&paths::target().join("debug/viewer"), args, log)?;
+    match child.wait() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("viewer exited ({status}): see target/viewer.log")),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 fn build(package: &str, release: bool) -> Result<(), String> {
     println!("  building {package}…");
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());

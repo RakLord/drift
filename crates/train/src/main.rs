@@ -13,6 +13,7 @@
 //! generations), and config/ (a snapshot of every setting used).
 
 mod checkpoint;
+mod tracks_log;
 mod config;
 mod metrics;
 mod runner;
@@ -39,6 +40,7 @@ use checkpoint::Population;
 use config::{TrainingConfig, WatchConfig};
 use metrics::{MetricsCsv, Report, Saved};
 use runner::{Env, evaluate, evaluate_some, run_genome};
+use tracks_log::TracksCsv;
 
 /// Seed stream for the `[best]` check tracks, apart from the training ones.
 const CHECK_STREAM: u64 = 0xC4EC_0B57;
@@ -114,8 +116,9 @@ fn load_track(relative: &str) -> Result<Arc<Track>, String> {
 }
 
 /// The held-out test set: library tracks (tracks/*.toml) not marked
-/// `test = false` and not trained on (fixed or pool).
-fn library_tracks<'a>(trained_on: impl Iterator<Item = &'a String>) -> Vec<Arc<Track>> {
+/// `test = false` and not trained on (fixed or pool), with their
+/// `tracks/<file>.toml` paths.
+fn library_tracks<'a>(trained_on: impl Iterator<Item = &'a String>) -> Vec<(String, Arc<Track>)> {
     let Ok(entries) = std::fs::read_dir(workspace_path("tracks")) else { return vec![] };
     let trained_on: Vec<PathBuf> = trained_on.filter_map(|f| workspace_path(f).canonicalize().ok()).collect();
     let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "toml")).collect();
@@ -123,8 +126,10 @@ fn library_tracks<'a>(trained_on: impl Iterator<Item = &'a String>) -> Vec<Arc<T
     paths.sort();
     paths
         .iter()
-        .filter_map(|p| TrackDef::load(p).ok().filter(|def| def.test).and_then(|def| Track::build(def).ok()))
-        .map(Arc::new)
+        .filter_map(|p| {
+            let track = TrackDef::load(p).ok().filter(|def| def.test).and_then(|def| Track::build(def).ok())?;
+            Some((format!("tracks/{}", p.file_name()?.to_string_lossy()), Arc::new(track)))
+        })
         .collect()
 }
 
@@ -222,7 +227,7 @@ fn pick_saved(
     results: &[Vec<Vec<EpisodeResult>>],
     cfg: &TrainingConfig,
     generator: &GeneratorParams,
-    spare: &[Arc<Track>],
+    spare: &[(String, Arc<Track>)],
     generation: u32,
     stage: &Stage,
     env: &Env,
@@ -233,14 +238,17 @@ fn pick_saved(
     let &(island, genome) = ranked.first().ok_or("no genomes")?;
     if !cfg.best.enabled() {
         let runs = results[island][genome].clone();
-        return Ok(Saved { island, genome, fitness: stage.fitness(&runs), runs, rank: 0 });
+        return Ok(Saved { island, genome, fitness: stage.fitness(&runs), runs, check_tracks: vec![], rank: 0 });
     }
 
     let chosen = &ranked[..cfg.best.candidates.min(ranked.len())];
     let check_seed = runner::mix(cfg.seed, CHECK_STREAM);
-    let mut tracks: Vec<Arc<Track>> = spare.iter().take(cfg.best.tracks as usize).cloned().collect();
+    let (mut ids, mut tracks): (Vec<String>, Vec<Arc<Track>>) = spare.iter().take(cfg.best.tracks as usize).cloned().unzip();
     let generated = cfg.best.tracks - tracks.len() as u32;
-    tracks.extend(runner::generation_tracks(generator, check_seed, generation, generated));
+    for (seed, track) in runner::generation_tracks(generator, check_seed, generation, generated) {
+        ids.push(tracks_log::generated_id(seed));
+        tracks.push(track);
+    }
     let seeds = runner::episode_seeds(check_seed, generation, tracks.len());
     let checks = evaluate_some(islands, chosen, &tracks, &seeds, env);
     chosen
@@ -250,7 +258,7 @@ fn pick_saved(
         .map(|(rank, (&(island, genome), check))| {
             let mut runs = results[island][genome].clone();
             runs.extend(check);
-            Saved { island, genome, fitness: stage.fitness(&runs), runs, rank }
+            Saved { island, genome, fitness: stage.fitness(&runs), runs, check_tracks: ids.clone(), rank }
         })
         // On a tie the higher-ranked one wins.
         .reduce(|best, next| if next.fitness > best.fitness { next } else { best })
@@ -332,7 +340,7 @@ fn run(args: Args) -> Result<(), String> {
     if !pool_tracks.is_empty() && cfg.tracks.pool_draw() == 0 {
         eprintln!("warning: tracks.pool has {} tracks but pool_per_generation is 0, so only the [best] check runs use it", pool_tracks.len());
     }
-    let test_tracks = library_tracks(cfg.tracks.trained_on());
+    let (test_ids, test_tracks): (Vec<String>, Vec<Arc<Track>>) = library_tracks(cfg.tracks.trained_on()).into_iter().unzip();
 
     // Start fresh or carry on from the latest checkpoint.
     let mut pop = match checkpoint::latest(&run_dir).filter(|_| args.resume) {
@@ -368,6 +376,7 @@ fn run(args: Args) -> Result<(), String> {
         println!("== polishing: sigma set to {}", polish.sigma_start);
     }
     let mut csv = MetricsCsv::open(&run_dir.join("metrics.csv"), pop.islands.len()).map_err(|e| e.to_string())?;
+    let mut tracks_csv = TracksCsv::open(&run_dir.join("tracks.csv"), pop.generation).map_err(|e| e.to_string())?;
     const HEADER_EVERY: u32 = 20;
     let mut first_generation = true;
 
@@ -398,12 +407,21 @@ fn run(args: Args) -> Result<(), String> {
         let stage = curriculum.stage().clone();
         // A polish stage has its own (finer) GA settings and track count.
         let ga = stage.ga(&cfg.ga);
-        let pool_order: Vec<Arc<Track>> =
-            runner::pool_order(cfg.seed, generation, pool_tracks.len()).into_iter().map(|k| pool_tracks[k].clone()).collect();
+        // Each track with its id and role for tracks.csv.
+        let pool_order = runner::pool_order(cfg.seed, generation, pool_tracks.len());
         let (pooled, spare) = pool_order.split_at(cfg.tracks.pool_draw());
         let mut tracks = fixed_tracks.clone();
-        tracks.extend_from_slice(pooled);
-        tracks.extend(runner::generation_tracks(&generator, cfg.seed, generation, stage.tracks_per_generation(cfg.tracks.per_generation)));
+        let mut drawn: Vec<(String, &str)> = cfg.tracks.fixed.iter().map(|f| (f.clone(), "fixed")).collect();
+        for &k in pooled {
+            tracks.push(pool_tracks[k].clone());
+            drawn.push((cfg.tracks.pool[k].clone(), "pool"));
+        }
+        let generated = stage.tracks_per_generation(cfg.tracks.per_generation);
+        for (seed, track) in runner::generation_tracks(&generator, cfg.seed, generation, generated) {
+            tracks.push(track);
+            drawn.push((tracks_log::generated_id(seed), "generated"));
+        }
+        let spare: Vec<(String, Arc<Track>)> = spare.iter().map(|&k| (cfg.tracks.pool[k].clone(), pool_tracks[k].clone())).collect();
         let seeds = runner::episode_seeds(cfg.seed, generation, tracks.len());
         // Shaping stages run on softer rules; the final stage on the real ones.
         let (scoring, episode) = stage.rules(&env.scoring, &env.episode);
@@ -414,11 +432,14 @@ fn run(args: Args) -> Result<(), String> {
             island.fitness = island_results.iter().map(|runs| stage.fitness(runs)).collect();
             island.objectives = island_results.iter().map(|runs| stage.objectives(runs)).collect();
         }
-        let saved = pick_saved(&pop.islands, &results, &cfg, &generator, spare, generation, &stage, &stage_env)?;
+        let saved = pick_saved(&pop.islands, &results, &cfg, &generator, &spare, generation, &stage, &stage_env)?;
         let best_island = &pop.islands[saved.island];
         let best_genome = &best_island.genomes[saved.genome];
 
         let mut report = Report::new(generation, &stage.name, &pop.islands, &results, &saved, 0.0);
+        let mut logged: Vec<(&str, &str)> = drawn.iter().map(|(id, role)| (id.as_str(), *role)).collect();
+        logged.extend(saved.check_tracks.iter().map(|id| (id.as_str(), "check")));
+        let mut log_runs: Vec<EpisodeResult> = saved.runs.clone();
         let due_test = cfg.tracks.test_every > 0 && generation % cfg.tracks.test_every == 0 && !test_tracks.is_empty();
         if due_test {
             let seeds = runner::episode_seeds(cfg.seed, u32::MAX, test_tracks.len());
@@ -429,7 +450,11 @@ fn run(args: Args) -> Result<(), String> {
             let runs = run_genome(&best_island.spec, &best_genome.params, &test_tracks, &seeds, &test_env);
             report.test_fitness = Some(stage.fitness(&runs));
             report.test_laps = Some(runs.iter().map(|r| r.laps()).sum::<f64>() / runs.len() as f64);
+            logged.extend(test_ids.iter().map(|id| (id.as_str(), "test")));
+            log_runs.extend(runs);
         }
+        let rows = logged.iter().zip(&log_runs).map(|(&(id, role), r)| (id, role, r));
+        tracks_csv.write(generation, rows).map_err(|e| e.to_string())?;
 
         // This generation's best driver is always on disk.
         let note = format!("run {} gen {generation} stage {}", args.name, stage.name);

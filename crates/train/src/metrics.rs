@@ -16,6 +16,9 @@ pub struct Saved {
     pub genome: usize,
     /// Its runs this generation, plus any `[best]` check runs.
     pub runs: Vec<EpisodeResult>,
+    /// The `[best]` check tracks' ids (see `tracks_log`), for the runs after
+    /// the training ones.
+    pub check_tracks: Vec<String>,
     /// Fitness over all of `runs`.
     pub fitness: f64,
     /// Where its fitness ranked this generation (0 = the fittest).

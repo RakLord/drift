@@ -35,8 +35,9 @@ pub fn mix(a: u64, b: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Fresh generated tracks for a generation (skipping seeds that fail).
-pub fn generation_tracks(params: &GeneratorParams, run_seed: u64, generation: u32, count: u32) -> Vec<Arc<Track>> {
+/// Fresh generated tracks for a generation (skipping seeds that fail), each
+/// with the seed that rebuilds it.
+pub fn generation_tracks(params: &GeneratorParams, run_seed: u64, generation: u32, count: u32) -> Vec<(u64, Arc<Track>)> {
     let base = mix(run_seed, u64::from(generation));
     let mut tracks = vec![];
     let mut candidate = 0u64;
@@ -46,7 +47,7 @@ pub fn generation_tracks(params: &GeneratorParams, run_seed: u64, generation: u3
         if let Ok(def) = generator::generate(params, seed)
             && let Ok(track) = Track::build(def)
         {
-            tracks.push(Arc::new(track));
+            tracks.push((seed, Arc::new(track)));
         }
         assert!(candidate < 1000, "the track generator keeps failing; check config/generator.toml");
     }

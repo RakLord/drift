@@ -10,6 +10,7 @@ name = "drift"
 path = "src/main.rs"
 
 [dependencies]
+common.workspace = true
 inquire = "0.7.5"
 toml.workspace = true
 

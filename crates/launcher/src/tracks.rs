@@ -26,7 +26,7 @@ pub fn stem(path: &str) -> String {
     Path::new(path).file_stem().map_or_else(|| path.to_string(), |s| s.to_string_lossy().into_owned())
 }
 
-/// Every saved track, test_loop first, then by name.
+/// Every saved track, by file name.
 pub fn all() -> Vec<SavedTrack> {
     let Ok(entries) = std::fs::read_dir(paths::root().join("tracks")) else { return vec![] };
     let mut tracks: Vec<SavedTrack> = entries
@@ -44,7 +44,7 @@ pub fn all() -> Vec<SavedTrack> {
             })
         })
         .collect();
-    tracks.sort_by_key(|t| (t.stem != "test_loop", t.stem.clone()));
+    tracks.sort_by_key(|t| t.stem.clone());
     tracks
 }
 
@@ -96,6 +96,23 @@ impl TrackChoice {
         if parts.is_empty() { "?".into() } else { parts.join(" + ") }
     }
 
+    /// As a training config's `[tracks]` table (for the viewer to edit).
+    pub fn to_toml(&self) -> String {
+        let list = |paths: &[String]| toml::Value::Array(paths.iter().map(|p| toml::Value::String(p.clone())).collect());
+        format!(
+            "[tracks]\nper_generation = {}\nfixed = {}\npool = {}\npool_per_generation = {}\n",
+            self.generated,
+            list(&self.fixed),
+            list(&self.pool),
+            self.pooled
+        )
+    }
+
+    /// Whether a generation would have anything to drive.
+    pub fn has_tracks(&self) -> bool {
+        !self.fixed.is_empty() || self.pool_draw() > 0 || self.generated > 0
+    }
+
     /// The trainer flags that set exactly this choice.
     pub fn args(&self) -> Vec<String> {
         let mut args = vec![];
@@ -133,6 +150,8 @@ mod tests {
             choice.args().join(" "),
             "--track tracks/a.toml --pool tracks/b.toml --pool tracks/c.toml --pooled 5 --generated 3"
         );
+        let table: toml::Table = toml::from_str(&choice.to_toml()).unwrap();
+        assert_eq!(TrackChoice::from_table(table.get("tracks").and_then(|t| t.as_table())), choice);
         let none = TrackChoice { generated: 2, ..TrackChoice::default() };
         assert_eq!(none.args().join(" "), "--no-fixed --no-pool --pooled 0 --generated 2");
     }

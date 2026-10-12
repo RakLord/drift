@@ -10,6 +10,7 @@ pub mod crossings;
 pub mod def;
 pub mod generator;
 pub mod grid;
+pub mod stats;
 pub mod zones;
 
 use std::fmt;
@@ -26,6 +27,7 @@ pub use corners::Corner;
 pub use crossings::Crossing;
 use crossings::Centreline;
 pub use grid::RayHit;
+pub use stats::TrackStats;
 pub use zones::{Zone, ZoneKind};
 use grid::SegmentGrid;
 

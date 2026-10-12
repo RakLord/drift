@@ -1,15 +1,21 @@
+pub mod library;
 pub mod play;
 pub mod replay;
+pub mod tracks;
 pub mod watch;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// A screen asking the app to open another view of a training run.
+/// A screen asking the app to open another view.
 pub enum Switch {
     /// The run's top genomes racing together.
     Watch(String),
     /// The run's replays.
     Replays(String),
+    /// The track screen, showing this run's training set (or the defaults).
+    Tracks(Option<String>),
+    /// Drive this library track (from the track screen).
+    Drive(PathBuf),
 }
 
 /// The run a file under `runs/<run>/` belongs to.

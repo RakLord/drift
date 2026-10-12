@@ -60,6 +60,30 @@ impl Defaults {
     }
 }
 
+/// Ask what to train on, starting from `current`: on the viewer's track
+/// screen (maps) or here (lists).
+fn choose_tracks(current: &TrackChoice) -> Result<TrackChoice, Exit> {
+    const VIEWER: &str = "Pick in the viewer (maps)";
+    let how = Select::new("Pick tracks:", vec![VIEWER, "Pick here (lists)"]).prompt()?;
+    if how != VIEWER {
+        return prompt_tracks(current);
+    }
+    let file = std::env::temp_dir().join(format!("drift-tracks-{}.toml", std::process::id()));
+    std::fs::write(&file, current.to_toml()).map_err(|e| e.to_string())?;
+    println!("  pick tracks in the viewer window (F fixed, P pool), Esc when done…");
+    let picked = launch::viewer_and_wait(&["--set".into(), file.to_string_lossy().into_owned()]).and_then(|()| {
+        let text = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
+        let table = text.parse::<toml::Table>().map_err(|e| e.to_string())?;
+        Ok(TrackChoice::from_table(table.get("tracks").and_then(|t| t.as_table())))
+    });
+    let _ = std::fs::remove_file(&file);
+    let picked = picked?;
+    if !picked.has_tracks() {
+        return Err(Exit::Fail("no training tracks picked: set some fixed, pool or generated tracks".into()));
+    }
+    Ok(picked)
+}
+
 /// Ask what to train on, starting from `current`: fixed maps, then a pool
 /// from the rest, then generated tracks.
 fn prompt_tracks(current: &TrackChoice) -> Result<TrackChoice, Exit> {
@@ -152,7 +176,7 @@ impl App {
             start.pool.retain(|p| p != track);
             start.fixed = vec![track.to_owned()];
         }
-        let chosen = prompt_tracks(&start)?;
+        let chosen = choose_tracks(&start)?;
         let generations = CustomType::<u32>::new("Generations:")
             .with_default(defaults.generations)
             .with_validator(|n: &u32| Ok(if *n == 0 { Validation::Invalid("at least 1".into()) } else { Validation::Valid }))
@@ -175,7 +199,7 @@ impl App {
 
     pub fn watch(&mut self, run: &Run) -> Flow {
         self.open_viewer(&run.name, run.tracks.fixed.first())?;
-        let on = run.tracks.fixed.first().map_or_else(|| "test_loop".into(), |f| tracks::stem(f));
+        let on = run.tracks.fixed.first().map_or_else(|| "the default track".into(), |f| tracks::stem(f));
         Ok(format!("viewer following {} on {on}", run.name))
     }
 
@@ -219,7 +243,7 @@ impl App {
             .with_default(false)
             .with_help_message("saved into the run's config, so later resumes keep them")
             .prompt()?;
-        let tracks = if change { Some(prompt_tracks(&run.tracks)?) } else { None };
+        let tracks = if change { Some(choose_tracks(&run.tracks)?) } else { None };
 
         let from = run.last_checkpoint.map_or_else(|| "the start (no checkpoint yet)".into(), |c| format!("its checkpoint at gen {c}"));
         let on = tracks.as_ref().map_or_else(String::new, |t| format!(" on {} per generation", t.summary()));
@@ -275,6 +299,7 @@ impl App {
         if has_replays {
             actions.push("Replays");
         }
+        actions.push("Its tracks (maps)");
         if run.running() {
             actions.extend(["Show log", "Stop training"]);
         } else {
@@ -287,6 +312,7 @@ impl App {
             "Watch live" | "Watch best driver" => self.watch(run),
             "Watch top cars (multi-car)" => self.watch_top(run),
             "Replays" => self.replays(run),
+            "Its tracks (maps)" => self.track_screen(Some(run)),
             "Stop training" => self.stop(run),
             "Resume training…" => self.resume(run),
             _ => show_log(run),
@@ -303,11 +329,26 @@ impl App {
         Ok(format!("viewer open on {}", track.stem))
     }
 
+    /// The viewer's track screen: every track as a map, and what the
+    /// defaults (or `run`) train on.
+    fn track_screen(&mut self, run: Option<&Run>) -> Flow {
+        let mut args = vec!["--tracks".to_string()];
+        if let Some(run) = run {
+            args.extend(["--run".into(), run.name.clone()]);
+        }
+        self.children.viewer(&args)?;
+        Ok(format!("viewer open on the track screen{}", run.map_or_else(String::new, |r| format!(" ({})", r.name))))
+    }
+
     pub fn tracks_menu(&mut self, runs: &[Run]) -> Flow {
         let all = tracks::all();
-        let labels: Vec<String> = all.iter().map(|t| format!("{:<30} {}", t.to_string(), track_note(t, runs))).collect();
+        let mut labels = vec!["▸ Track screen (maps, training sets)".to_string()];
+        labels.extend(all.iter().map(|t| format!("{:<30} {}", t.to_string(), track_note(t, runs))));
         let picked = Select::new("Tracks:", labels).with_page_size(15).raw_prompt()?;
-        let track = &all[picked.index];
+        if picked.index == 0 {
+            return self.track_screen(None);
+        }
+        let track = &all[picked.index - 1];
         let action = Select::new(&format!("{}:", track.stem), vec!["Drive here", "Start new training on it…"]).prompt()?;
         if action == "Drive here" { self.drive(track) } else { self.new_training(runs, Some(&track.path)) }
     }

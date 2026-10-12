@@ -11,7 +11,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 
 **Done: M1**
 - Done:
-  - Bezier tracks (`sim/track`, `tracks/test_loop.toml`), hard/soft edges, verge grip
+  - Bezier tracks (`sim/track`), hard/soft edges, verge grip
   - wall collisions (`sim/world`)
   - track rendering, sparks, cosmetic bumper damage
   - zones and scoring (`sim/scoring`, `config/scoring.toml`), score HUD with popups
@@ -34,10 +34,12 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 **In progress: M3**
 - Done: library tracks carry a `test` flag (on unless `test = false`, e.g. the skidpad); the trainer tests only on those.
 - Done: run dashboard in the viewer (`C` / `--charts`): fitness, drift quality, angle, pedals, diversity, end reasons, from `metrics.csv`.
-- Done: library panel (`O` / `--library`): every track in `tracks/`, click to drive, toggle the test set, rename, delete (moved to `tracks/deleted/`). `L` cycles the library.
+- Done: library panel (`O` / `--library`): every track in `tracks/`, click to drive, toggle the test set, rename, delete (moved to `tracks/deleted/`). `L` cycles the library. Now replaced by the track screen.
 - Done: polish phase (`polish` on a stage) and a sturdier best.genome (`[best]`: top 5 re-run on 6 extra tracks).
 - Done: track pool (`tracks.pool` + `pool_per_generation`): each generation draws a few saved tracks; the `[best]` check runs take pool tracks first. Set in `cargo drift`: when starting a run, or on resume ("Change its tracks?", saved into the run's config).
-- Next: rest of the track manager (see *Tracks › Track manager*): `tracks.csv` per-track results, then the viewer screen.
+- Done: track screen (`O` / `--tracks`, see *Tracks › Track manager*): map cards, stats, fixed/pool/off roles for the defaults or a run, launcher "Pick in the viewer".
+- Done: `runs/<run>/tracks.csv` and the "this generation" strip on the track screen.
+- Next: Generate tab, then Results tab (see *Tracks › Track manager*).
 - Then: M3's features are in; what's left is user-led training to get cars drifting through drive -> slide -> judged (and, once judged works, polishing).
 
 **In progress: M4** (network view and run dashboard already done)
@@ -62,11 +64,12 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `cargo run --release -p train -- --name <run> [--generations N] [--stage N] [--track path]... [--pool path]... [--pooled N] [--generated N] [--resume]`: train
 - `cargo run -p viewer -- --genome runs/<run>/best.genome`: watch a trained driver
 - `cargo run -p viewer -- --follow <run>`: watch a run live (picks up each new best between runs)
-- `--track tracks/<file>.toml` on any viewer command: drive/watch on that saved track instead of `test_loop`
+- `--track tracks/<file>.toml` on any viewer command: drive/watch on that saved track instead of `generated_1` (the fallback when it's gone: `config/default_track.toml`, a copy built into the viewer)
 - `V` while an AI drives: network view (add `--net` to start with it open)
 - `cargo run -p viewer -- --watch <run>`: the run's top genomes racing live (Tab / click to follow, `O` leaderboard)
 - While following a run (`--follow`): `Q` opens its top cars, `J` its replays (`Q` / `J` also switch between those two); Esc goes back. `cargo drift` → Runs → a run has the same two options
 - `cargo run -p viewer -- --replays <run>`: watch a run's replays (newest first, picker open); `--replay <file>` for one file; `X` while an AI drives saves its last run
+- `cargo run -p viewer -- --tracks [--run <run>]`: the track screen (`O` from play; while following a run it opens on that run). `--set <file>` edits just that file's `[tracks]` (the launcher uses it)
 
 **Tuning notes**
 - It feels a little icy on keyboard. Retest on gamepad before tuning.
@@ -157,11 +160,12 @@ Good driving and drift physics is what gives this project value. The GA will als
 - **Track library:** about 15 approved tracks, saved to disk. A good generated track can be approved into the library (`K`). Library tracks are never trained on; those with `test` on (the default) form the **test set** the trainer measures generalisation on.
 - **Bezier editor:** later, not v1.
 
-### Track manager (in progress: pool mode done)
+### Track manager (in progress: Library tab and this-generation strip done)
 
 Why: run6 sat at ~730 m for 280 gens with the gate value swinging ±80 m, mostly from which random generated tracks it drew (full-time runs ranged 387–1195 m). 9 of the saved driver's 10 runs per generation were fresh generated tracks nobody chose, and picking saved tracks in the launcher is a bare name list.
 
-- **Where:** a full screen in the viewer (`--tracks`, and a key from play mode); the launcher's Tracks menu opens it. It supersedes the library panel (`O`).
+- **Where:** a full screen in the viewer (`--tracks`, and `O` from play mode); the launcher's Tracks menu opens it. It replaces the library panel.
+- **Launcher:** when starting a run or changing a run's tracks, it offers "Pick in the viewer (maps)" beside the name lists. The viewer edits a temp `[tracks]` file (`--tracks --set <file>`), and the launcher reads it back and passes flags as before.
 - **Layout:** a grid of track cards (map outline, name, length, corners, role chips) and a detail pane for the selected card (bigger map, stats, results, actions).
 - **Stats** from the corner analysis: length, corners per km, sharpest corner, hairpins, figure-8 crossings, hard-edge share.
 - **Tabs:**
@@ -179,7 +183,8 @@ Why: run6 sat at ~730 m for 280 gens with the gate value swinging ±80 m, mostly
   - The `[best]` check tracks take pool tracks not drawn this generation first, then generated ones (one shuffle per generation, so they never overlap).
   - Generated tracks kept from Results are rebuilt from seed + the run's snapshot `generator.toml`; the trainer doesn't save every generated track.
   - A track can't be both fixed and pool (the trainer refuses).
-- **Build order:** pool mode (done) → `tracks.csv` → screen with Library tab + training-set editing → Generate tab → Results tab.
+- **This generation:** with a run picked, a strip shows every track its saved driver drove in the newest generation of `tracks.csv` (generated ones rebuilt from seed), each with its laps and end. Generated ones can be kept.
+- **Build order:** pool mode (done) → screen with Library tab + training-set editing → `tracks.csv` + this-generation strip → Generate tab → Results tab. The screen came first because not seeing the training tracks was the pain point.
 
 ## Scoring
 

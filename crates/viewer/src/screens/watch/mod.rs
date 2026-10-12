@@ -45,7 +45,7 @@ const SPLIT_TRACK_SHARE: f32 = 0.45;
 const STRIP_H: f32 = 52.0;
 /// Clicking within this many metres of a car follows it.
 const CLICK_RADIUS: f64 = 5.0;
-const DEFAULT_TRACK: &str = "tracks/test_loop.toml";
+const DEFAULT_TRACK: &str = "config/default_track.toml";
 
 /// One colour per island: the validated categorical palette, in order.
 const ISLAND_COLOURS: [Color; 6] = [
