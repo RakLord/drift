@@ -73,12 +73,15 @@ stall_rpm = 1100.0
 bite_rpm = 2200.0
 
 [drivetrain]
-ratio = 6.2                   # single fixed gear x final drive (~3rd gear feel)
+ratio = 8.0                   # single fixed gear x final drive (~3rd gear feel)
 inertia = 0.6                 # shafts + welded diff, at the axle
 
 [brakes]
-front_torque = 2200.0         # per wheel at full pedal
-rear_torque = 1200.0          # per wheel at full pedal
+# Full pedal in a straight line sits just under lock-up (~0.9 g), rears a touch
+# weaker so they never lock first. No ABS: braking while turning can still
+# lock the fronts, so trail braking needs a modulated pedal.
+front_torque = 1200.0         # per wheel at full pedal
+rear_torque = 580.0           # per wheel at full pedal
 handbrake_torque = 4000.0     # whole rear axle at full pull
 
 [aero]
