@@ -88,7 +88,7 @@ Good driving and drift physics is what gives this project value. The GA will als
 - **Weight transfer:** a spring-damper per corner for roll and pitch, so the load shift has a realistic delay. That's what makes weight-transfer initiations (feints) work.
 - **Drivetrain:**
   - engine torque curve, rev limiter, engine braking and flywheel inertia
-  - analog clutch that slips under speed difference and **heats up** when it slips; a hot clutch fades (riding it cooks it, a kick barely warms it)
+  - analog clutch with a realistic pedal: free play (0–30%), a bite zone (30–75%), then disengaged. It **heats up** when it slips and a hot clutch fades (riding it in the bite zone cooks it, a kick barely warms it)
   - no anti-stall: the engine **stalls** if held under 500 rpm for ~0.4 s (a quick handbrake yank in gear recovers, holding it stalls); `Y` / pad Select restarts
   - single fixed ratio (no gearbox in v1)
   - locked or welded diff, as on real drift cars

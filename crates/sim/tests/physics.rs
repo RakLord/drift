@@ -222,7 +222,7 @@ fn riding_the_clutch_cooks_it_and_it_fades() {
     let mut car = car_at_rest();
     drive(&mut car, 15.0, |_, t| Controls {
         throttle: 1.0,
-        clutch: if t < 0.5 { 1.0 } else { 0.85 },
+        clutch: if t < 0.5 { 1.0 } else { 0.55 },
         brake: 1.0,
         ..Default::default()
     });
@@ -231,6 +231,25 @@ fn riding_the_clutch_cooks_it_and_it_fades() {
     println!("after 15 s riding the clutch: {temp:.0} degC");
     assert!(temp > p.fade_start_temp, "only {temp:.0} degC");
     assert!(sim::car::engine::clutch_fade(p, temp) < 1.0);
+}
+
+#[test]
+fn a_foot_resting_in_the_free_play_costs_nothing_but_the_bite_zone_slips() {
+    let run = |pedal: f64| {
+        let mut car = car_rolling(60.0 * KMH);
+        let start = car.state.drivetrain.clutch_temp;
+        let mut slipping = 0;
+        drive(&mut car, 10.0, |s, _| {
+            slipping += usize::from(!s.drivetrain.clutch_locked);
+            Controls { throttle: 0.8, clutch: pedal, ..Default::default() }
+        });
+        (car.state.drivetrain.clutch_temp - start, slipping)
+    };
+    let (rest_heat, rest_slip) = run(0.2);
+    let (bite_heat, bite_slip) = run(0.6);
+    println!("resting foot: +{rest_heat:.0} degC, slipping {rest_slip} ticks; in the bite: +{bite_heat:.0} degC, {bite_slip} ticks");
+    assert!(rest_heat < 2.0 && rest_slip < 10, "free play shouldn't slip");
+    assert!(bite_slip > 300 && bite_heat > 20.0, "the bite zone should slip and heat");
 }
 
 #[test]

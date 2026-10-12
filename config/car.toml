@@ -69,6 +69,10 @@ torque_curve = [
 
 [clutch]
 max_torque = 700.0
+# Pedal feel: free play at the top of the travel (fully clamped), then the
+# bite zone where capacity falls away, then fully disengaged.
+free_play = 0.3               # pedal below this: fully engaged
+disengaged_at = 0.75          # pedal above this: fully disengaged
 # Slipping turns power into heat (slip torque x slip speed). A quick clutch
 # kick barely warms it; riding it cooks it, and a hot clutch fades (holds
 # less torque, slips more) until it cools down again.

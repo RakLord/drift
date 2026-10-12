@@ -61,10 +61,23 @@ pub fn clutch_fade(p: &ClutchParams, temp: f64) -> f64 {
     1.0 - (1.0 - p.fade_grip) * t
 }
 
-/// Most torque the clutch can pass right now: less with the pedal pressed,
-/// and less when it's hot.
+/// How engaged the clutch is at pedal position `pedal` (0 = foot off,
+/// 1 = floored): fully engaged through the free play, falling away through
+/// the bite zone, disengaged past it.
+pub fn clutch_engagement(p: &ClutchParams, pedal: f64) -> f64 {
+    1.0 - smoothstep(p.free_play, p.disengaged_at, pedal)
+}
+
+/// Whether the pedal sits in the bite zone, where the clutch can slip.
+pub fn in_bite_zone(p: &ClutchParams, pedal: f64) -> bool {
+    let e = clutch_engagement(p, pedal);
+    e > 0.02 && e < 0.98
+}
+
+/// Most torque the clutch can pass right now: less in the bite zone, none
+/// once disengaged, and less when it's hot.
 pub fn clutch_capacity(p: &ClutchParams, pedal: f64, temp: f64) -> f64 {
-    p.max_torque * (1.0 - pedal) * clutch_fade(p, temp)
+    p.max_torque * clutch_engagement(p, pedal) * clutch_fade(p, temp)
 }
 
 #[cfg(test)]
@@ -107,6 +120,11 @@ mod tests {
         let p = CarParams::default().clutch;
         let cool = p.ambient_temp;
         assert_eq!(clutch_capacity(&p, 0.0, cool), p.max_torque);
+        assert_eq!(clutch_capacity(&p, p.free_play * 0.9, cool), p.max_torque, "free play does nothing");
+        let bite = (p.free_play + p.disengaged_at) / 2.0;
+        assert!((clutch_capacity(&p, bite, cool) - p.max_torque / 2.0).abs() < 1.0, "half way through the bite");
+        assert!(in_bite_zone(&p, bite) && !in_bite_zone(&p, 0.0) && !in_bite_zone(&p, 1.0));
+        assert_eq!(clutch_capacity(&p, p.disengaged_at, cool), 0.0);
         assert_eq!(clutch_capacity(&p, 1.0, cool), 0.0);
         assert!((clutch_capacity(&p, 0.0, p.fade_full_temp + 50.0) - p.max_torque * p.fade_grip).abs() < 1e-9);
         let half = (p.fade_start_temp + p.fade_full_temp) / 2.0;

@@ -74,8 +74,10 @@ pub struct EpisodeStats {
     pub hard_hits: u32,
     pub spins: u32,
     pub ticks: u64,
-    /// Seconds with the clutch pedal part-way (riding it).
-    pub clutch_ride_time: f64,
+    /// Seconds with the clutch pedal in the bite zone...
+    pub clutch_pedal_time: f64,
+    /// ...and of those, seconds actually slipping (riding it).
+    pub clutch_slip_time: f64,
     /// Hottest the clutch got, degC.
     pub peak_clutch_temp: f64,
 }
@@ -232,9 +234,12 @@ impl Episode {
                 _ => {}
             }
         }
-        let pedal = self.world.car.state.controls.clutch;
-        if (0.05..0.95).contains(&pedal) {
-            stats.clutch_ride_time += TICK;
+        let car = &self.world.car;
+        if crate::car::engine::in_bite_zone(&car.params.clutch, car.state.controls.clutch) {
+            stats.clutch_pedal_time += TICK;
+            if !car.state.drivetrain.clutch_locked && car.state.engine_running() {
+                stats.clutch_slip_time += TICK;
+            }
         }
         stats.peak_clutch_temp = stats.peak_clutch_temp.max(self.world.car.state.drivetrain.clutch_temp);
         if self.scorer.drift.active {

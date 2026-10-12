@@ -28,9 +28,10 @@ pub struct Report {
     pub drift_share: f64,
     pub drift_angle: f64,
     pub zones: f64,
-    /// Share of driving time with the clutch part-way in, and the mean
-    /// hottest clutch per run.
-    pub clutch_ride: f64,
+    /// Share of driving time with the clutch pedal in the bite zone, share
+    /// actually slipping there (riding it), and the mean hottest clutch.
+    pub clutch_pedal: f64,
+    pub clutch_slip: f64,
     pub clutch_peak: f64,
     /// Share of runs ending each way, in `EndReason::ALL` order.
     pub ends: [f64; 6],
@@ -93,7 +94,8 @@ impl Report {
             drift_share: mean(all.iter().map(|r| r.stats.drift_time / r.time.max(1e-9))),
             drift_angle: mean(drifting.iter().map(|r| r.stats.average_angle())),
             zones: mean(all.iter().map(|r| f64::from(r.stats.zones_entered + r.stats.clips))),
-            clutch_ride: mean(all.iter().map(|r| r.stats.clutch_ride_time / r.time.max(1e-9))),
+            clutch_pedal: mean(all.iter().map(|r| r.stats.clutch_pedal_time / r.time.max(1e-9))),
+            clutch_slip: mean(all.iter().map(|r| r.stats.clutch_slip_time / r.time.max(1e-9))),
             clutch_peak: mean(all.iter().map(|r| r.stats.peak_clutch_temp)),
             ends,
             diversity: mean(islands.iter().map(|i| diversity(&i.genomes))),
@@ -117,7 +119,7 @@ impl Report {
             _ => String::new(),
         };
         format!(
-            "gen {:>4} [{}] best {:>8.1} mean {:>8.1} | best car {:>5.0} m {:.2} laps, score {:.0} | {} | clutch ride {:.0}% peak {:.0}°C | div {:.3} σ {:.3} | {:.1}s {:.1}M steps/s{test}",
+            "gen {:>4} [{}] best {:>8.1} mean {:>8.1} | best car {:>5.0} m {:.2} laps, score {:.0} | {} | clutch pedal {:.0}% slip {:.0}% peak {:.0}°C | div {:.3} σ {:.3} | {:.1}s {:.1}M steps/s{test}",
             self.generation,
             self.stage,
             self.best,
@@ -126,7 +128,8 @@ impl Report {
             self.best_laps,
             self.best_score.total(),
             ends.join(" "),
-            self.clutch_ride * 100.0,
+            self.clutch_pedal * 100.0,
+            self.clutch_slip * 100.0,
             self.clutch_peak,
             self.diversity,
             self.sigma,
@@ -167,7 +170,8 @@ impl MetricsCsv {
                     "drift_share",
                     "drift_angle",
                     "zones",
-                    "clutch_ride",
+                    "clutch_pedal",
+                    "clutch_slip",
                     "clutch_peak",
                 ]
                 .iter()
@@ -204,7 +208,8 @@ impl MetricsCsv {
             r.drift_share,
             r.drift_angle,
             r.zones,
-            r.clutch_ride,
+            r.clutch_pedal,
+            r.clutch_slip,
             r.clutch_peak,
         ] {
             num(v);

@@ -97,6 +97,8 @@ pub struct EngineParams {
 #[serde(deny_unknown_fields)]
 pub struct ClutchParams {
     pub max_torque: f64,
+    pub free_play: f64,
+    pub disengaged_at: f64,
     pub heat_capacity: f64,
     pub cooling: f64,
     pub ambient_temp: f64,
