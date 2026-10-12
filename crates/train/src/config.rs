@@ -40,6 +40,10 @@ pub struct IslandConfig {
 #[serde(deny_unknown_fields)]
 pub struct TrackConfig {
     pub per_generation: u32,
+    /// Saved tracks (workspace-relative) driven every generation on top of
+    /// the generated ones. They're left out of the test set.
+    #[serde(default)]
+    pub fixed: Vec<String>,
     pub test_every: u32,
 }
 

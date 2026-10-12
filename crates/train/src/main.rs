@@ -1,7 +1,10 @@
 //! Headless trainer: evolves driver networks.
 //!
 //! `cargo run --release -p train -- --name <run> [--generations N]
-//! [--config path] [--stage N] [--seed N] [--resume]`
+//! [--config path] [--stage N] [--seed N] [[--track path]... | --no-fixed] [--generated N] [--resume]`
+//!
+//! `--track` (repeatable) / `--no-fixed` and `--generated` override
+//! `tracks.fixed` and `tracks.per_generation`.
 //!
 //! Writes everything to `runs/<name>/`: metrics.csv, best.genome (the best
 //! driver so far each generation), checkpoints/ (whole population every few
@@ -38,11 +41,14 @@ struct Args {
     config: Option<PathBuf>,
     stage: Option<usize>,
     seed: Option<u64>,
+    tracks: Option<Vec<String>>,
+    generated: Option<u32>,
     resume: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
-    let mut args = Args { name: String::new(), generations: None, config: None, stage: None, seed: None, resume: false };
+    let mut args =
+        Args { name: String::new(), generations: None, config: None, stage: None, seed: None, tracks: None, generated: None, resume: false };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         let mut value = |flag: &str| it.next().ok_or_else(|| format!("{flag} needs a value"));
@@ -52,12 +58,15 @@ fn parse_args() -> Result<Args, String> {
             "--config" => args.config = Some(PathBuf::from(value("--config")?)),
             "--stage" => args.stage = Some(value("--stage")?.parse().map_err(|_| "bad --stage")?),
             "--seed" => args.seed = Some(value("--seed")?.parse().map_err(|_| "bad --seed")?),
+            "--track" => args.tracks.get_or_insert_default().push(value("--track")?),
+            "--no-fixed" => args.tracks = Some(vec![]),
+            "--generated" => args.generated = Some(value("--generated")?.parse().map_err(|_| "bad --generated")?),
             "--resume" => args.resume = true,
             other => return Err(format!("unknown argument {other}")),
         }
     }
     if args.name.is_empty() {
-        return Err("usage: train --name <run> [--generations N] [--config path] [--stage N] [--seed N] [--resume]".into());
+        return Err("usage: train --name <run> [--generations N] [--config path] [--stage N] [--seed N] [[--track path]... | --no-fixed] [--generated N] [--resume]".into());
     }
     Ok(args)
 }
@@ -75,11 +84,19 @@ fn snapshot(dir: &Path, name: &str, value: &impl Serialize) -> std::io::Result<(
     std::fs::write(dir.join(name), toml::to_string_pretty(value).map_err(std::io::Error::other)?)
 }
 
+/// Load a saved track (workspace-relative path).
+fn load_track(relative: &str) -> Result<Arc<Track>, String> {
+    let def = TrackDef::load(workspace_path(relative)).map_err(|e| format!("{relative}: {e}"))?;
+    Track::build(def).map(Arc::new).map_err(|e| format!("{relative}: {e}"))
+}
+
 /// The held-out test set: library tracks (tracks/*.toml) not marked
-/// `test = false`.
-fn library_tracks() -> Vec<Arc<Track>> {
+/// `test = false` and not trained on as fixed tracks.
+fn library_tracks(fixed: &[String]) -> Vec<Arc<Track>> {
     let Ok(entries) = std::fs::read_dir(workspace_path("tracks")) else { return vec![] };
+    let fixed: Vec<PathBuf> = fixed.iter().filter_map(|f| workspace_path(f).canonicalize().ok()).collect();
     let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "toml")).collect();
+    paths.retain(|p| p.canonicalize().map_or(true, |p| !fixed.contains(&p)));
     paths.sort();
     paths
         .iter()
@@ -101,7 +118,9 @@ fn main() {
 
 fn run(args: Args) -> Result<(), String> {
     let run_dir = workspace_path("runs").join(&args.name);
-    if run_dir.exists() && !args.resume {
+    // A run exists once it has written its config (the launcher may have
+    // already created the folder for train.log).
+    if run_dir.join("config").exists() && !args.resume {
         return Err(format!("{} already exists: use --resume, or pick another --name", run_dir.display()));
     }
 
@@ -116,6 +135,12 @@ fn run(args: Args) -> Result<(), String> {
     }
     if let Some(generations) = args.generations {
         cfg.generations = generations;
+    }
+    if let Some(tracks) = &args.tracks {
+        cfg.tracks.fixed = tracks.clone();
+    }
+    if let Some(generated) = args.generated {
+        cfg.tracks.per_generation = generated;
     }
     let (car, scoring, generator): (CarParams, ScoringParams, GeneratorParams) = if args.resume {
         let saved = |name: &str| run_dir.join("config").join(name);
@@ -138,7 +163,11 @@ fn run(args: Args) -> Result<(), String> {
     }
 
     let env = Env { car, scoring, episode: cfg.episode.clone() };
-    let test_tracks = library_tracks();
+    let fixed_tracks = cfg.tracks.fixed.iter().map(|f| load_track(f)).collect::<Result<Vec<_>, _>>()?;
+    if fixed_tracks.is_empty() && cfg.tracks.per_generation == 0 {
+        return Err("no training tracks: set tracks.per_generation or tracks.fixed".into());
+    }
+    let test_tracks = library_tracks(&cfg.tracks.fixed);
 
     // Start fresh or carry on from the latest checkpoint.
     let mut pop = match checkpoint::latest(&run_dir).filter(|_| args.resume) {
@@ -170,12 +199,13 @@ fn run(args: Args) -> Result<(), String> {
 
     let shapes: Vec<String> = pop.islands.iter().map(|i| i.spec.describe()).collect();
     println!(
-        "run '{}': {} islands x {} [{}], {} tracks/gen, test tracks: {} ({}), {} threads",
+        "run '{}': {} islands x {} [{}], {} generated tracks/gen, fixed tracks: [{}], test tracks: {} ({}), {} threads",
         args.name,
         pop.islands.len(),
         cfg.ga.population,
         shapes.join(", "),
         cfg.tracks.per_generation,
+        fixed_tracks.iter().map(|t| t.def.name.as_str()).collect::<Vec<_>>().join(", "),
         test_tracks.len(),
         test_tracks.iter().map(|t| t.def.name.as_str()).collect::<Vec<_>>().join(", "),
         rayon::current_num_threads()
@@ -184,7 +214,8 @@ fn run(args: Args) -> Result<(), String> {
     while pop.generation < cfg.generations {
         let generation = pop.generation;
         let started = Instant::now();
-        let tracks = runner::generation_tracks(&generator, cfg.seed, generation, cfg.tracks.per_generation);
+        let mut tracks = fixed_tracks.clone();
+        tracks.extend(runner::generation_tracks(&generator, cfg.seed, generation, cfg.tracks.per_generation));
         let seeds = runner::episode_seeds(cfg.seed, generation, tracks.len());
         // Shaping stages run on softer rules; the final stage on the real ones.
         let stage = curriculum.stage().clone();

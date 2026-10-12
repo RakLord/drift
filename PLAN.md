@@ -50,7 +50,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `cargo test -p sim --test physics -- --nocapture --test-threads=1`: physics numbers
 - `cargo run -p viewer -- --screenshot out.png --frames 420 --autopilot`: render a scripted lap to PNG (dev check for visuals)
 - `cargo run -p viewer -- --seed 7 --map`: open generated track 7 in map view
-- `cargo run --release -p train -- --name <run> [--generations N] [--stage N] [--resume]`: train
+- `cargo run --release -p train -- --name <run> [--generations N] [--stage N] [--track path]... [--generated N] [--resume]`: train
 - `cargo run -p viewer -- --genome runs/<run>/best.genome`: watch a trained driver
 - `cargo run -p viewer -- --follow <run>`: watch a run live (picks up each new best between runs)
 - `--track tracks/<file>.toml` on any viewer command: drive/watch on that saved track instead of `test_loop`
@@ -213,7 +213,7 @@ Outputs are produced once per decision and held until the next one.
 
 - **Genome:** the network's weights as a flat list.
 - **Generation loop:**
-  1. Evaluate every genome on the same K tracks (fresh procedural tracks each generation).
+  1. Evaluate every genome on the same K tracks: fresh procedural tracks each generation (`tracks.per_generation`), plus any saved tracks listed in `tracks.fixed`. Fixed tracks are left out of the test set.
   2. Aggregate fitness across the tracks.
   3. Elites survive unchanged.
   4. The rest are bred via tournament selection, crossover and mutation.

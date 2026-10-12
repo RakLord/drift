@@ -56,6 +56,7 @@ end_on_spin = true
 
 [tracks]
 per_generation = 3        # fresh generated tracks every generation (config/generator.toml)
+fixed = ["tracks/generated_1.toml"]              # saved tracks driven every generation too, e.g. ["tracks/generated_1.toml"]; left out of the test set
 test_every = 10           # best genome vs the library tracks (tracks/*.toml) every N gens; 0 = never
 
 [checkpoints]
