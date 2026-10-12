@@ -33,7 +33,9 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 
 **In progress: M3**
 - Done: library tracks carry a `test` flag (on unless `test = false`, e.g. the skidpad); the trainer tests only on those.
-- Next, in order: run summary / graphs, track library curation in the viewer, polish phase. Alongside: user-led training to get cars drifting through drive -> slide -> judged.
+- Done: run dashboard in the viewer (`C` / `--charts`): fitness, drift quality, angle, pedals, diversity, end reasons, from `metrics.csv`.
+- Done: library panel (`O` / `--library`): every track in `tracks/`, click to drive, toggle the test set, rename, delete (moved to `tracks/deleted/`). `L` cycles the library.
+- Next: polish phase. Alongside: user-led training to get cars drifting through drive -> slide -> judged.
 
 **Conventions**
 - The sim uses `f64` (SI units). The NN will use `f32`.
@@ -51,6 +53,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `cargo run --release -p train -- --name <run> [--generations N] [--stage N] [--resume]`: train
 - `cargo run -p viewer -- --genome runs/<run>/best.genome`: watch a trained driver
 - `cargo run -p viewer -- --follow <run>`: watch a run live (picks up each new best between runs)
+- `--track tracks/<file>.toml` on any viewer command: drive/watch on that saved track instead of `test_loop`
 - `V` while an AI drives: network view (add `--net` to start with it open)
 
 **Tuning notes**

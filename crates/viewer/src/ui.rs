@@ -12,6 +12,8 @@ const HEADING_HEIGHT: f32 = 32.0;
 const SLIDER_HEIGHT: f32 = 42.0;
 const BAR_HEIGHT: f32 = 12.0;
 const BUTTON_HEIGHT: f32 = 34.0;
+const ITEM_HEIGHT: f32 = 34.0;
+const FIELD_HEIGHT: f32 = 36.0;
 const GAP: f32 = 8.0;
 const TEXT_SIZE: f32 = 18.0;
 const SCROLL_STEP: f32 = 48.0;
@@ -206,6 +208,60 @@ impl Panel {
             *value = v.round() as u32;
         }
         changed
+    }
+
+    /// A selectable list row: label on the left, detail on the right.
+    /// Returns true when clicked.
+    pub fn list_item(&mut self, label: &str, detail: &str, selected: bool) -> bool {
+        if !self.section_open {
+            return false;
+        }
+        let Some(top) = self.row(ITEM_HEIGHT) else { return false };
+        let (x, w, h) = (self.x + PAD, self.width - 2.0 * PAD, ITEM_HEIGHT - 4.0);
+        let hot = inside(x, top, w, h);
+        if selected {
+            draw_rectangle(x, top, w, h, Color { a: 0.22, ..theme::NEON_PINK });
+            draw_rectangle(x, top, 3.0, h, theme::NEON_PINK);
+        } else if hot {
+            draw_rectangle(x, top, w, h, theme::GRID_MAJOR);
+        }
+        let detail_w = measure_text(detail, None, 14, 1.0).width;
+        text(&fit(label, w - detail_w - 24.0, TEXT_SIZE), x + 10.0, top + 21.0, TEXT_SIZE, theme::TEXT);
+        text(detail, x + w - detail_w - 8.0, top + 20.0, 14.0, theme::TEXT_DIM);
+        self.clicked(x, top, w, h)
+    }
+
+    /// A one-line text box for `value`, edited while `editing` is set.
+    /// Returns Some(true) on Enter (keep the text), Some(false) on Escape.
+    pub fn text_field(&mut self, value: &mut String, editing: bool) -> Option<bool> {
+        if !self.section_open {
+            return None;
+        }
+        let top = self.row(FIELD_HEIGHT)?;
+        let (x, w, h) = (self.x + PAD, self.width - 2.0 * PAD, FIELD_HEIGHT - 6.0);
+        draw_rectangle(x, top, w, h, theme::GRID_MAJOR);
+        draw_rectangle_lines(x, top, w, h, 1.0, if editing { theme::NEON_CYAN } else { theme::TEXT_DIM });
+        let mut result = None;
+        if editing {
+            while let Some(c) = get_char_pressed() {
+                if !c.is_control() && value.chars().count() < 40 {
+                    value.push(c);
+                }
+            }
+            if is_key_pressed(KeyCode::Backspace) {
+                value.pop();
+            }
+            if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
+                result = Some(true);
+            }
+            if is_key_pressed(KeyCode::Escape) {
+                result = Some(false);
+            }
+        }
+        let shown = fit(value, w - 24.0, TEXT_SIZE);
+        let caret = if editing && (get_time() * 2.0) as i64 % 2 == 0 { "|" } else { "" };
+        text(&format!("{shown}{caret}"), x + 8.0, top + 21.0, TEXT_SIZE, theme::TEXT);
+        result
     }
 
     /// A row of buttons sharing the width. Returns the index clicked.

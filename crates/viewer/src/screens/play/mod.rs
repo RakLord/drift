@@ -2,8 +2,11 @@
 
 mod configs;
 mod generator_panel;
+mod library;
+mod library_panel;
 mod tracks;
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use common::Vec2;
@@ -24,6 +27,7 @@ use crate::render::score::ScoreHud;
 use crate::render::{self, camera::FollowCamera, effects::Effects, ground, hud, text, theme, track::TrackMesh};
 use configs::{Configs, Reload};
 use generator_panel::{GeneratorPanel, PanelAction};
+use library_panel::{LibraryAction, LibraryPanel};
 use tracks::TrackSource;
 
 const TICK: f64 = 1.0 / 120.0;
@@ -57,6 +61,9 @@ pub struct PlayScreen {
     panel: GeneratorPanel,
     /// Clicked in the panel during the last draw; applied on the next update.
     panel_action: Option<PanelAction>,
+    library: LibraryPanel,
+    /// Clicked in the library panel during the last draw.
+    library_action: Option<LibraryAction>,
     mesh: TrackMesh,
     scorer: Scorer,
     score_hud: ScoreHud,
@@ -101,7 +108,7 @@ impl Pose {
 impl PlayScreen {
     pub fn new(options: &Options) -> Self {
         let mut warnings = vec![];
-        let configs = Configs::load(&mut warnings);
+        let configs = Configs::load(options.track.as_deref(), &mut warnings);
         let gen_params = configs.generator();
         let mut source = options.seed.map_or(TrackSource::Library, TrackSource::Generated);
         // Doughnuts need open space: start on the skidpad instead.
@@ -135,6 +142,8 @@ impl PlayScreen {
             gen_seed: options.seed.unwrap_or(1),
             panel: GeneratorPanel::new(options.generator),
             panel_action: None,
+            library: LibraryPanel::new(),
+            library_action: None,
             mesh,
             scorer,
             score_hud: ScoreHud::new(),
@@ -164,6 +173,9 @@ impl PlayScreen {
             toast: (!warnings.is_empty()).then(|| (warnings.join("; "), 8.0)),
         };
         screen.reset(); // rolling start
+        if options.library {
+            screen.library.toggle();
+        }
         if let Some(ai) = &screen.ai {
             // Drive with the settings the genome was trained with.
             if let Some(car) = &ai.run.car {
@@ -179,8 +191,13 @@ impl PlayScreen {
 
     pub fn update(&mut self, dt: f64) {
         let dt = dt.min(0.1);
-        self.handle_keys();
+        // While a name is being typed, keys belong to the text field.
+        let typing = self.library.typing();
+        if !typing {
+            self.handle_keys();
+        }
         self.apply_panel_action();
+        self.apply_library_action();
         self.dashboard.update(dt);
         self.apply_reloads(dt);
         self.score_hud.update(dt);
@@ -192,11 +209,14 @@ impl PlayScreen {
         }
 
         // Read input every frame (the gamepad needs polling) even if paused.
-        let input = self.input.controls(dt);
+        let mut input = self.input.controls(dt);
+        if typing {
+            input = sim::Controls::default();
+        }
         if self.input.reset_pressed() {
             self.reset();
         }
-        if self.input.restart_pressed() {
+        if self.input.restart_pressed() && !typing {
             self.world.car.restart_engine();
         }
         if self.paused {
@@ -319,7 +339,16 @@ impl PlayScreen {
         if let Some(action) = self.panel.show(&mut self.gen_params, &mut self.gen_seed) {
             self.panel_action = Some(action);
         }
+        let current = (self.source == TrackSource::Library).then(|| self.configs.library_path());
+        if let Some(action) = self.library.show(current) {
+            self.library_action = Some(action);
+        }
         self.dashboard.draw();
+    }
+
+    /// Whether keys are going to a text field (so Esc mustn't quit).
+    pub fn captures_keyboard(&self) -> bool {
+        self.library.typing()
     }
 
     /// Render pose between the last two ticks, so motion is smooth at any
@@ -478,7 +507,10 @@ impl PlayScreen {
             self.switch_track(TrackSource::Generated(next));
         }
         if is_key_pressed(KeyCode::L) {
-            self.switch_track(TrackSource::Library);
+            self.next_library_track();
+        }
+        if is_key_pressed(KeyCode::O) {
+            self.library.toggle();
         }
         if is_key_pressed(KeyCode::K) {
             self.keep_track();
@@ -492,7 +524,7 @@ impl PlayScreen {
         let (_, wheel) = mouse_wheel();
         let over_net = self.net_view == NetView::Full
             || (self.net_view == NetView::Split && mouse_position().0 >= self.track_width());
-        if wheel != 0.0 && !self.panel.hovered() && !over_net {
+        if wheel != 0.0 && !self.panel.hovered() && !self.library.hovered() && !over_net {
             self.camera.zoom_by(if wheel > 0.0 { 1.1 } else { 1.0 / 1.1 });
         }
     }
@@ -511,6 +543,43 @@ impl PlayScreen {
         }
     }
 
+    fn apply_library_action(&mut self) {
+        match self.library_action.take() {
+            Some(LibraryAction::Drive(path)) => self.drive_library_track(&path),
+            Some(LibraryAction::Changed(message)) => self.toast = Some((message, 3.0)),
+            Some(LibraryAction::Deleted(path)) => {
+                self.toast = Some((format!("moved {} to tracks/deleted/", file_name(&path)), 4.0));
+                if self.source == TrackSource::Library && self.configs.library_path().file_name() == path.file_name() {
+                    self.drive_library_track(&workspace_file(configs::LIBRARY_TRACK));
+                }
+            }
+            Some(LibraryAction::Error(message)) => self.toast = Some((message, 6.0)),
+            None => {}
+        }
+    }
+
+    fn drive_library_track(&mut self, path: &Path) {
+        match self.configs.watch_library_track(path) {
+            Ok(()) => self.switch_track(TrackSource::Library),
+            Err(err) => self.toast = Some((err, 6.0)),
+        }
+    }
+
+    /// `L`: back to the library track, or on to the next one if already on it.
+    fn next_library_track(&mut self) {
+        if self.source != TrackSource::Library {
+            self.switch_track(TrackSource::Library);
+            return;
+        }
+        let paths: Vec<PathBuf> = library::scan().into_iter().filter(|e| e.length.is_ok()).map(|e| e.path).collect();
+        let current = paths.iter().position(|p| library::same_file(p, self.configs.library_path()));
+        let next = current.map_or(0, |i| (i + 1) % paths.len());
+        match paths.get(next) {
+            Some(path) => self.drive_library_track(&path.clone()),
+            None => self.switch_track(TrackSource::Library),
+        }
+    }
+
     fn keep_track(&mut self) {
         let TrackSource::Generated(seed) = self.source else {
             self.toast = Some(("already a library track".to_owned(), 2.0));
@@ -520,6 +589,9 @@ impl PlayScreen {
             Ok(path) => (format!("kept as {}", path.display()), 4.0),
             Err(err) => (format!("couldn't keep track: {err}"), 6.0),
         });
+        if self.library.open {
+            self.library.refresh();
+        }
     }
 
     fn apply_reloads(&mut self, dt: f64) {
@@ -605,7 +677,7 @@ impl PlayScreen {
             &[
                 "pad: stick steer  RT throttle  LT brake  A/RB handbrake  X/LB clutch  Start reset",
                 "keys: WASD/arrows  Space handbrake  Shift clutch  R reset  P pause  [ ] speed  wheel zoom",
-                "N new track  F generator  L library track  K keep track  M map  E effects  T telemetry  G gamepad  C run charts  H help",
+                "N new track  F generator  L next library track  O library  K keep track  M map  E effects  T telemetry  G gamepad  C run charts  H help",
                 "Y / pad Select: restart a stalled engine   AI (--genome / --follow): Tab take over  I inputs  V network  B newest best",
             ]
         } else {
@@ -618,6 +690,10 @@ impl PlayScreen {
             text(line, 16.0, h - 8.0 - i as f32 * (size + 2.0), size, theme::TEXT_DIM);
         }
     }
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name().map_or(String::new(), |f| f.to_string_lossy().into_owned())
 }
 
 /// Bounding box of the track including verges.

@@ -16,6 +16,8 @@ pub struct Options {
     pub donut: bool,
     /// Start on the generated track for this seed instead of the library track.
     pub seed: Option<u64>,
+    /// The library track file to drive on (default tracks/test_loop.toml).
+    pub track: Option<String>,
     /// Start in map view.
     pub map_view: bool,
     /// Start with the generator panel open.
@@ -24,6 +26,8 @@ pub struct Options {
     pub genome: Option<PathBuf>,
     /// Keep loading the newest best genome as training writes it.
     pub follow: bool,
+    /// Start with the track library panel open.
+    pub library: bool,
     /// Start with the run dashboard open.
     pub charts: bool,
     /// Start with the network view open (split).
@@ -31,7 +35,7 @@ pub struct Options {
 }
 
 impl Options {
-    /// `[--seed N] [--map] [--generator] [--genome path | --follow run] [--net] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
+    /// `[--seed N | --track path] [--map] [--generator] [--library] [--genome path | --follow run] [--net] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
     pub fn from_args() -> Self {
         let mut options = Self::default();
         let mut frames = 240;
@@ -44,8 +48,10 @@ impl Options {
                 "--autopilot" => options.autopilot = true,
                 "--donut" => options.donut = true,
                 "--seed" => options.seed = args.next().and_then(|n| n.parse().ok()),
+                "--track" => options.track = args.next(),
                 "--map" => options.map_view = true,
                 "--generator" => options.generator = true,
+                "--library" => options.library = true,
                 "--net" => options.net = true,
                 "--genome" => options.genome = args.next().map(PathBuf::from),
                 "--charts" => options.charts = true,
@@ -88,6 +94,8 @@ impl App {
 
     pub fn frame(&mut self) -> Flow {
         // A screenshot run uses a fixed frame time so it is reproducible.
+        // Checked before the frame runs: Esc that cancels typing mustn't quit.
+        let typing = self.play.captures_keyboard();
         let dt = if self.options.screenshot.is_some() { 1.0 / 60.0 } else { f64::from(get_frame_time()) };
         self.play.update(dt);
         self.play.draw();
@@ -106,7 +114,7 @@ impl App {
             println!("saved {}", path.display());
             return Flow::Exit;
         }
-        if is_key_pressed(KeyCode::Escape) {
+        if is_key_pressed(KeyCode::Escape) && !typing {
             return Flow::Exit;
         }
         Flow::Continue

@@ -1,5 +1,7 @@
 //! The config and track files the play screen watches and hot-reloads.
 
+use std::path::{Path, PathBuf};
+
 use common::config::WatchedConfig;
 use serde::de::DeserializeOwned;
 use sim::car::CarParams;
@@ -28,6 +30,8 @@ pub struct Configs {
     car: Watched<CarParams>,
     scoring: Watched<ScoringParams>,
     track: Watched<TrackDef>,
+    /// The library track file being watched.
+    track_path: PathBuf,
     generator: Watched<GeneratorParams>,
     timer: f64,
 }
@@ -61,12 +65,13 @@ impl<T: DeserializeOwned + Clone> Watched<T> {
 
 impl Configs {
     /// Load everything, recording a warning for anything that fell back to
-    /// its built-in default.
-    pub fn load(warnings: &mut Vec<String>) -> Self {
+    /// its built-in default. `track` replaces the default library track.
+    pub fn load(track: Option<&str>, warnings: &mut Vec<String>) -> Self {
         Self {
             car: Watched::load("car", "config/car.toml", CarParams::default, warnings),
             scoring: Watched::load("scoring", "config/scoring.toml", ScoringParams::default, warnings),
-            track: Watched::load("track", LIBRARY_TRACK, built_in_track, warnings),
+            track: Watched::load("track", track.unwrap_or(LIBRARY_TRACK), built_in_track, warnings),
+            track_path: workspace_file(track.unwrap_or(LIBRARY_TRACK)),
             generator: Watched::load("generator", "config/generator.toml", GeneratorParams::default, warnings),
             timer: 0.0,
         }
@@ -82,6 +87,23 @@ impl Configs {
 
     pub fn library_track(&self) -> TrackDef {
         self.track.get()
+    }
+
+    /// The library track file currently selected.
+    pub fn library_path(&self) -> &Path {
+        &self.track_path
+    }
+
+    /// Select (and watch) a different library track file.
+    pub fn watch_library_track(&mut self, path: &Path) -> Result<(), String> {
+        let mut warnings = vec![];
+        let watched = Watched::load("track", &path.to_string_lossy(), built_in_track, &mut warnings);
+        if let Some(warning) = warnings.pop() {
+            return Err(warning);
+        }
+        self.track = watched;
+        self.track_path = path.to_owned();
+        Ok(())
     }
 
     pub fn generator(&self) -> GeneratorParams {
