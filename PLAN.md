@@ -2,6 +2,33 @@
 
 A top-down 2D drift game where cars are driven by small neural networks trained with a genetic algorithm (neuroevolution). Mostly our own code: physics, NN, and GA are written from scratch.
 
+## Status
+
+**Done: M0** (except a gamepad tuning session)
+- `common`: Vec2/angle math, PCG32 RNG, TOML config + hot-reload watcher
+- `sim/car`: full car physics driven by `config/car.toml`, plus 12 behaviour tests (`sim/tests/physics.rs`)
+- `viewer`: free-drive screen with gamepad/keyboard, telemetry, smoke, skid marks, live car.toml reload
+
+**Next: M1**, starting with Bezier tracks + walls + collisions, then the generator, zones, scoring, driver prep, game HUD.
+
+**Conventions**
+- The sim uses `f64` (SI units). The NN will use `f32`.
+- World axes: +x right, +y up, angles CCW. Car frame: +x forward, +y left. Positive steer = left.
+- Drift angle (`body_slip_angle`) is negative in a left-hand drift.
+- macroquad's `Camera2D` is y-down by default, so `FollowCamera` uses a negative y zoom.
+- The sim ticks at 120 Hz with 4 car substeps (~3 µs per car per tick).
+- Effects are viewer-only, run on sim ticks, and use their own RNG.
+
+**Commands**
+- `cargo run -p viewer`: drive (`H` in-app for controls)
+- `cargo test -p sim --test physics -- --nocapture --test-threads=1`: physics numbers
+- `cargo run -p viewer -- --screenshot out.png --frames 420 --autopilot`: render a scripted drift to PNG (dev check for visuals)
+
+**Tuning notes**
+- It feels a little icy on keyboard. Retest on gamepad before tuning.
+- Knobs: `tyre.slide_ratio` ↑, `tyre.falloff` ↑, `tyre.mu_peak` ↑, `steering.rate_deg_per_s` ↓.
+- The single fixed gear makes 0–100 slow (~7.9 s) and limits angle at high speed. A gearbox is a stretch goal.
+
 ## Base concepts
 
 - **Game:** drift a car around a judged course. Points only while drifting. Scoring follows Formula Drift judging: **Line** (clip points / zones), **Angle**, **Style**, with speed as a multiplier.
