@@ -1,0 +1,17 @@
+[package]
+name = "launcher"
+description = "Menu-driven launcher (`cargo drift`): start, watch and stop training runs, drive tracks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "drift"
+path = "src/main.rs"
+
+[dependencies]
+inquire = "0.7.5"
+toml.workspace = true
+
+[lints]
+workspace = true

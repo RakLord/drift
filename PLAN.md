@@ -46,6 +46,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - Effects are viewer-only, run on sim ticks, and use their own RNG.
 
 **Commands**
+- `cargo drift`: menu launcher for all of the below (start/resume/stop/watch runs, drive tracks). Trainers run in the background, logging to `runs/<run>/train.log`
 - `cargo run -p viewer`: drive (`H` in-app for controls)
 - `cargo test -p sim --test physics -- --nocapture --test-threads=1`: physics numbers
 - `cargo run -p viewer -- --screenshot out.png --frames 420 --autopilot`: render a scripted lap to PNG (dev check for visuals)
@@ -77,7 +78,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 |---|---|
 | Language | Rust |
 | Rendering | macroquad, top-down 2D |
-| Deps | macroquad, rayon, serde + toml (saves, config), gilrs (gamepad). Everything else is ours. |
+| Deps | macroquad, rayon, serde + toml (saves, config), gilrs (gamepad). Everything else is ours. Exception: the `launcher` tool uses `inquire` for its menus |
 | Sim | Pure Rust with no graphics deps, deterministic, fixed 120 Hz timestep |
 | Physics | Quality is a top priority. See *Physics* |
 | Decisions | NN runs every N ticks (default 4 → 30 Hz) and holds actions in between; cars are staggered |
@@ -327,6 +328,7 @@ drift/
                              mutation, fitness (curriculum), review (ratings → selection), diversity
     train/src/               main, config, runner (parallel eval), checkpoint, metrics (CSV),
                              publish (send genomes to viewer)
+    launcher/src/            `cargo drift` menu: runs (status from runs/ + /proc), tracks, launch (build + spawn)
     viewer/src/
       main.rs, app.rs        screen state machine
       input/                 gamepad, keyboard
