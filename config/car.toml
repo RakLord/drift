@@ -53,7 +53,7 @@ rev_limit_rpm = 7800.0
 limiter_hysteresis_rpm = 150.0
 friction_base = 15.0          # Nm, engine braking at 0 rpm
 friction_per_krpm = 5.0       # extra Nm of engine braking per 1000 rpm
-# Full-throttle torque curve: [rpm, Nm]. Peak ~340 hp around 6000 rpm.
+# Full-throttle torque curve: [rpm, Nm]. Peak ~364 hp around 7000-7500 rpm.
 torque_curve = [
     [1000.0, 200.0],
     [2000.0, 280.0],
@@ -73,7 +73,7 @@ stall_rpm = 1100.0
 bite_rpm = 2200.0
 
 [drivetrain]
-ratio = 8.0                   # single fixed gear x final drive (~3rd gear feel)
+ratio = 8.0                   # single fixed gear x final drive (~2nd gear feel)
 inertia = 0.6                 # shafts + welded diff, at the axle
 
 [brakes]
@@ -82,7 +82,9 @@ inertia = 0.6                 # shafts + welded diff, at the axle
 # lock the fronts, so trail braking needs a modulated pedal.
 front_torque = 1200.0         # per wheel at full pedal
 rear_torque = 580.0           # per wheel at full pedal
-handbrake_torque = 4000.0     # whole rear axle at full pull
+# Hydraulic drift handbrake: strong enough to lock the rears against the engine
+# even in gear with throttle on. Clutching in still locks faster (no flywheel).
+handbrake_torque = 8000.0     # whole rear axle at full pull
 
 [aero]
 drag = 0.40                   # 0.5 * air density * Cd * frontal area
