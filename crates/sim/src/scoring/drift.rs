@@ -7,8 +7,11 @@ use super::params::DriftParams;
 pub enum DriftEvent {
     None,
     Started,
-    /// Direction changed without the drift ending (linked).
+    /// Direction changed without the drift ending (linked), after holding
+    /// the side before for at least `transition_min_hold_secs`.
     Transition,
+    /// Direction changed, but the side before was too short: a flick.
+    Flick,
     /// Angle stayed low long enough, or the car slowed or went backwards.
     Ended,
     Spin,
@@ -19,6 +22,8 @@ pub struct DriftDetector {
     pub active: bool,
     /// Sign of the drift angle for the current drift.
     pub direction: f64,
+    /// Seconds on the current side (since the start or the last switch).
+    pub side_secs: f64,
     below_for: f64,
     /// Spun and not yet straightened out; no new drift can start.
     spun: bool,
@@ -54,12 +59,14 @@ impl DriftDetector {
             if deg >= p.start_angle_deg && kmh >= p.min_speed_kmh && forward {
                 self.active = true;
                 self.direction = angle.signum();
+                self.side_secs = 0.0;
                 self.below_for = 0.0;
                 return DriftEvent::Started;
             }
             return DriftEvent::None;
         }
 
+        self.side_secs += dt;
         if !forward || kmh < p.min_speed_kmh * 0.5 {
             self.active = false;
             return DriftEvent::Ended;
@@ -74,8 +81,10 @@ impl DriftDetector {
         }
         self.below_for = 0.0;
         if deg >= p.start_angle_deg && angle.signum() != self.direction {
+            let held = self.side_secs >= p.transition_min_hold_secs;
             self.direction = angle.signum();
-            return DriftEvent::Transition;
+            self.side_secs = 0.0;
+            return if held { DriftEvent::Transition } else { DriftEvent::Flick };
         }
         DriftEvent::None
     }
@@ -107,11 +116,20 @@ mod tests {
     }
 
     #[test]
-    fn quick_flick_is_a_transition() {
+    fn held_side_then_quick_switch_is_a_transition() {
         let mut d = DriftDetector::default();
-        run(&mut d, 30.0, 0.5);
+        run(&mut d, 30.0, 1.0);
         assert_eq!(run(&mut d, 2.0, 0.1), vec![]);
         assert_eq!(run(&mut d, -30.0, 0.5), vec![DriftEvent::Transition]);
+    }
+
+    #[test]
+    fn short_side_then_switch_is_a_flick() {
+        let mut d = DriftDetector::default();
+        run(&mut d, 30.0, 0.3);
+        assert_eq!(run(&mut d, -30.0, 0.3), vec![DriftEvent::Flick]);
+        assert_eq!(run(&mut d, 30.0, 1.0), vec![DriftEvent::Flick], "0.3 s on the left side is still a flick");
+        assert_eq!(run(&mut d, -30.0, 0.3), vec![DriftEvent::Transition]);
     }
 
     #[test]

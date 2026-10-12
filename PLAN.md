@@ -198,7 +198,7 @@ All numbers live in `config/scoring.toml` (hot-reloaded).
   - **Angle:** ramps up from 12°, full at 40–65°, tapers off towards a spin.
   - **Line:** clips + outer zones.
   - **Style:**
-    - transitions (linking direction changes) are a bonus
+    - transitions (linking direction changes) are a bonus, but only if the side before was held ≥ 0.75 s; a quicker switch is a flick and earns nothing
     - wall taps are a bonus: rear bumper into a hard wall at 0.3–3 m/s; at most one per 2 s and 2 per combo, so they can't be farmed
     - bobbles (angle dips sharply then recovers) are a penalty
 - **Combo:** points pile up × a multiplier.
@@ -261,7 +261,8 @@ Outputs are produced once per decision and held until the next one.
 - **Islands:** several sub-populations, each with its own network shape and activation functions. Breeding happens within an island only. Periodically the worst island is replaced with a copy of the best.
 - **Crossover:** neuron-level (a child takes each hidden neuron's whole incoming weight set from one parent).
 - **Mutation:** Gaussian noise on a random subset of weights, plus a rare large reset. σ shrinks over time or self-adapts per genome.
-- **Fitness (shaped from gen 0):** driving reward (progress, capped after stage 1, plus time alive) multiplied by (1 + drift_bonus × drift quality), where drift quality is raw angle-time. Banked judged score (Line/Angle/Style) counts in the final stage. Stages: drive → slide → judged. Shaping stages soften the scoring (drift from 5°, flat speed multiplier, spins don't end the run, no bobble penalty).
+- **Fitness (shaped from gen 0):** driving reward (progress, capped after stage 1, plus time alive) multiplied by (1 + drift_bonus × drift quality), where drift quality is *flow*. Banked judged score (Line/Angle/Style) counts in the final stage. Stages: drive → slide → judged. Shaping stages soften the scoring (drift from 5°, flat speed multiplier, spins don't end the run, no bobble penalty).
+- **Flow (drift quality, `[flow]` in scoring.toml):** came in after the slide stage learned to wiggle (quick left/right flicks paid the same raw angle-time as long arcs, and were safer). Each second drifting earns the angle points' shape (full at 40–65°, tapering towards a spin) × a hold credit: 0 → 1 over the first 1 s on one side, then up to 1.5 by 3 s. A linked transition carries 75% of the ramp into the next side; a flick, an end or a spin starts it again. Quality = flow-seconds ÷ run time (1.0 = a full-angle drift, each side held past the ramp, the whole run). Rewards long sweeping drifts without penalising anything. Quality numbers from before the switch aren't comparable. Metrics: `drift_hold` / `top_hold` (seconds per side), and the console's `side` column; the viewer HUD shows the live `flow x` credit.
 - **Clutch penalty (`clutch` per stage):** a press shorter than 0.4 s is a kick and is free. Holding the clutch any longer counts, each second weighted by drift angle (0.25 with no angle, rising to 1 at 45°). The run's reward and both Pareto objectives are scaled by 1 − strength × (weighted hold time ÷ run time), never below 0. Strength 2 in every stage. Logged as `clutch_hold` / `clutch_hold_angle`.
 - **Selection:** Pareto ranking over (driving, drift quality) inside each island, so slidey crashers survive alongside grip drivers.
 - **Stage change:** σ resets and 30% of each island is reseeded with heavily mutated copies of its best.

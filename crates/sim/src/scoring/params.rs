@@ -14,6 +14,9 @@ pub struct ScoringParams {
     pub line: LineParams,
     pub style: StyleParams,
     pub combo: ComboParams,
+    /// Missing in older replays and top files: the defaults then.
+    #[serde(default)]
+    pub flow: FlowParams,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -24,6 +27,10 @@ pub struct DriftParams {
     pub end_angle_deg: f64,
     pub end_hold_secs: f64,
     pub spin_angle_deg: f64,
+    /// Switching sides only counts as a transition if the side before was
+    /// held this long; quicker is a flick (0 in older files: every switch).
+    #[serde(default)]
+    pub transition_min_hold_secs: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -81,6 +88,39 @@ pub struct ComboParams {
     pub hard_hit_penalty: f64,
 }
 
+/// Flow: drift credit that builds up the longer one side is held (see
+/// `super::flow`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlowParams {
+    /// Hold credit ramps from 0 to 1 over this many seconds on one side...
+    pub ramp_secs: f64,
+    /// ...then on up to 1 + bonus...
+    pub bonus: f64,
+    /// ...by this many seconds held.
+    pub bonus_secs: f64,
+    /// Share of the ramp carried into the next side by a linked transition.
+    pub link_keep: f64,
+}
+
+impl Default for FlowParams {
+    fn default() -> Self {
+        ScoringParams::default().flow
+    }
+}
+
+impl FlowParams {
+    /// Credit multiplier after `hold` seconds on one side.
+    pub fn hold_credit(&self, hold: f64) -> f64 {
+        if hold < self.ramp_secs {
+            hold / self.ramp_secs
+        } else {
+            let t = common::math::inverse_lerp(self.ramp_secs, self.bonus_secs, hold).clamp(0.0, 1.0);
+            1.0 + self.bonus * t
+        }
+    }
+}
+
 impl Default for ScoringParams {
     fn default() -> Self {
         toml::from_str(DEFAULT_SCORING_TOML).expect("config/scoring.toml is invalid")
@@ -136,6 +176,26 @@ mod tests {
         assert_eq!(f(50.0), 1.0);
         assert!(f(85.0) < 1.0);
         assert_eq!(f(p.angle.zero_at_deg), 0.0);
+    }
+
+    #[test]
+    fn hold_credit_ramps_then_bonus() {
+        let p = ScoringParams::default().flow;
+        assert_eq!(p.hold_credit(0.0), 0.0);
+        assert!((p.hold_credit(p.ramp_secs / 2.0) - 0.5).abs() < 1e-9);
+        assert!((p.hold_credit(p.ramp_secs) - 1.0).abs() < 1e-9);
+        assert!((p.hold_credit(p.bonus_secs) - (1.0 + p.bonus)).abs() < 1e-9);
+        assert_eq!(p.hold_credit(p.bonus_secs * 10.0), 1.0 + p.bonus);
+    }
+
+    #[test]
+    fn older_files_without_flow_still_parse() {
+        let mut old: toml::Table = toml::from_str(DEFAULT_SCORING_TOML).unwrap();
+        old.remove("flow");
+        old["drift"].as_table_mut().unwrap().remove("transition_min_hold_secs");
+        let p: ScoringParams = toml::from_str(&toml::to_string(&old).unwrap()).unwrap();
+        assert_eq!(p.drift.transition_min_hold_secs, 0.0, "every switch is a transition, as before");
+        assert_eq!(p.flow.ramp_secs, ScoringParams::default().flow.ramp_secs);
     }
 
     #[test]

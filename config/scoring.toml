@@ -7,12 +7,22 @@ min_speed_kmh = 25.0          # ...at or above this speed, moving forwards
 end_angle_deg = 8.0           # drift ends after holding below this angle...
 end_hold_secs = 0.3           # ...for this long (a transition passes through quickly)
 spin_angle_deg = 100.0
+transition_min_hold_secs = 0.75  # a side held shorter than this then switched is a flick, not a transition
 
 [angle]
 points_per_sec = 100.0
 full_from_deg = 40.0          # full angle points between these angles
 full_to_deg = 65.0
 zero_at_deg = 100.0           # tapers to nothing at spin angle
+
+[flow]
+# Training's drift quality: angle points' shape x hold credit, per second.
+# Hold credit builds up the longer one side is held, so long sweeping drifts
+# beat quick flicks.
+ramp_secs = 1.0               # 0 -> 1 over this long on one side...
+bonus = 0.5                   # ...then up to 1 + bonus...
+bonus_secs = 3.0              # ...by this long
+link_keep = 0.75              # share of the ramp a linked transition carries over
 
 [speed]
 # Multiplier on everything earned while drifting.

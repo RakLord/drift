@@ -57,9 +57,9 @@ clutch_grace_secs = 0.4   # a clutch press shorter than this is a kick; longer i
 
 [tracks]
 per_generation = 3        # fresh generated tracks every generation (config/generator.toml)
-fixed = ["tracks/generated_1.toml"]              # saved tracks driven every generation too, e.g. ["tracks/generated_1.toml"]; left out of the test set
-pool = []                 # saved tracks to draw from, e.g. ["tracks/generated_9.toml", ...]; left out of the test set
-pool_per_generation = 0   # pool tracks drawn each generation (also feeds the [best] check tracks)
+fixed = []              # saved tracks driven every generation too, e.g. ["tracks/generated_1.toml"]; left out of the test set
+pool = ["tracks/skidpad.toml", "tracks/generated_9.toml", "tracks/generated_11.toml", "tracks/generated_1.toml"]                 # saved tracks to draw from, e.g. ["tracks/generated_9.toml", ...]; left out of the test set
+pool_per_generation = 1   # pool tracks drawn each generation (also feeds the [best] check tracks)
 test_every = 10           # best genome vs the library tracks (tracks/*.toml) every N gens; 0 = never
 
 [checkpoints]
@@ -93,8 +93,12 @@ drifters = 10
 #           + pedal_bonus * seconds on handbrake/clutch
 #           + line/angle/style * judged points
 #   fitness = reward * (1 - clutch.strength * clutch cost) - penalty * penalty points
-# drift_quality is raw angle-time (1.0 = a 45 degree drift held the whole run),
-# so drifting pays from generation 0 whether or not combos get banked.
+# drift_quality is flow (config/scoring.toml [flow]): per second drifting, the
+# angle points' shape (full at 40-65 degrees) x a hold credit that builds up
+# the longer one side is held (0 -> 1 over ramp_secs, up to 1 + bonus). Linked
+# transitions keep most of it; flicks start again. 1.0 = a full-angle drift,
+# each side held past the ramp, the whole run. Pays from generation 0 whether
+# or not combos get banked.
 # clutch cost = share of the run holding the clutch past a kick
 # ([episode] clutch_grace_secs), each second weighted from calm_weight at no
 # angle up to 1 at 45 degrees or more. Never below 0; it also cuts both pareto
@@ -135,7 +139,7 @@ style = 0.0
 penalty = 0.0
 clutch = { strength = 2.0, calm_weight = 0.25 }
 shaping = { drift_start_angle_deg = 5.0, speed_multiplier = 1.0, end_on_spin = false, bobble_penalty = 0.0 }
-advance = { metric = "drift_quality", at_least = 0.3, generations = 10 }
+advance = { metric = "drift_quality", at_least = 0.35, generations = 10 }  # flow
 
 [[curriculum]]
 name = "judged"

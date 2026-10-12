@@ -50,6 +50,8 @@ pub struct Report {
     pub mean_progress: f64,
     pub drift_share: f64,
     pub drift_angle: f64,
+    /// Mean seconds each side of a drift was held, over drifting runs.
+    pub drift_hold: f64,
     pub zones: f64,
     /// Share of driving time with the clutch pedal in the bite zone, share
     /// actually slipping there (riding it), and the mean hottest clutch.
@@ -58,15 +60,16 @@ pub struct Report {
     pub clutch_peak: f64,
     /// Share of runs ending each way, in `EndReason::ALL` order.
     pub ends: [f64; 6],
-    /// Drift quality (raw angle-time, see `evo::fitness::drift_quality`):
+    /// Drift quality (flow, see `evo::fitness::drift_quality`):
     /// the best genome's mean, and the population's.
     pub best_quality: f64,
     pub mean_quality: f64,
     /// The top drifter: the genome with the highest drift quality (often
     /// not the fittest). Its drift quality, average drift angle (deg),
-    /// judged score and laps.
+    /// seconds per drift side, judged score and laps.
     pub top_quality: f64,
     pub top_angle: f64,
+    pub top_hold: f64,
     pub top_score: f64,
     pub top_laps: f64,
     /// Spins per run, across the population.
@@ -140,6 +143,11 @@ impl Report {
             let angle: f64 = runs.iter().map(|r| r.stats.angle_seconds).sum();
             if time > 0.0 { angle / time } else { 0.0 }
         };
+        let drifting_hold = |runs: &[EpisodeResult]| {
+            let time: f64 = runs.iter().map(|r| r.stats.drift_time).sum();
+            let sides: u32 = runs.iter().map(|r| r.stats.drift_sides).sum();
+            if sides > 0 { time / f64::from(sides) } else { 0.0 }
+        };
         let mut ends = [0.0; 6];
         for r in &all {
             let k = EndReason::ALL.iter().position(|&e| e == r.end).unwrap_or(0);
@@ -163,6 +171,7 @@ impl Report {
             mean_progress: mean(all.iter().map(|r| r.progress)),
             drift_share: mean(all.iter().map(|r| r.stats.drift_time / r.time.max(1e-9))),
             drift_angle: mean(drifting.iter().map(|r| r.stats.average_angle())),
+            drift_hold: mean(drifting.iter().map(|r| r.stats.average_hold())),
             zones: mean(all.iter().map(|r| f64::from(r.stats.zones_entered + r.stats.clips))),
             clutch_pedal: mean(all.iter().map(|r| r.stats.clutch_pedal_time / r.time.max(1e-9))),
             clutch_slip: mean(all.iter().map(|r| r.stats.clutch_slip_time / r.time.max(1e-9))),
@@ -171,6 +180,7 @@ impl Report {
             best_quality: mean(best_runs.iter().map(|r| drift_quality(r))),
             top_quality: quality_of(top_runs),
             top_angle: drifting_angle(top_runs),
+            top_hold: drifting_hold(top_runs),
             top_score: mean(top_runs.iter().map(|r| r.score.total())),
             top_laps: mean(top_runs.iter().map(|r| r.laps())),
             spins: mean(all.iter().map(|r| f64::from(r.stats.spins))),
@@ -194,7 +204,7 @@ impl Report {
 
     /// What the console columns mean; printed once at the start.
     pub fn legend() -> &'static str {
-        "drift q = angle-time (1.0 = a 45° drift held the whole run). top = the most drift-y genome, \
+        "drift q = flow (1.0 = a full-angle drift, each side held 1 s+, the whole run; flicks earn little). side = seconds per drift side. top = the most drift-y genome, \
          saved = the driver written to best.genome (fitness over all its runs; # = its fitness rank this generation). score = banked judged points. angle = typical biggest angle per run. \
          ends: T time up, NP no progress, CR crashed, ST stalled, SP spun, BK backwards"
     }
@@ -202,8 +212,8 @@ impl Report {
     /// Column headings; printed at the start and every so often.
     pub fn header() -> String {
         [
-            "  gen stage │ ── top drifter ──────────── │ ── saved best ──────────── │ ── population ────────────────── │ ends %            │ pedals %             │",
-            "            │ drift q  angle  score  laps │ fitness drift q  laps    # │ drift q  >20°  angle spins  bdiv │  T NP CR ST SP BK │  hb clutch slip hold │ secs",
+            "  gen stage │ ── top drifter ────────────────── │ ── saved best ──────────── │ ── population ────────────────── │ ends %            │ pedals %             │",
+            "            │ drift q  angle  side  score  laps │ fitness drift q  laps    # │ drift q  >20°  angle spins  bdiv │  T NP CR ST SP BK │  hb clutch slip hold │ secs",
         ]
         .join("\n")
     }
@@ -221,11 +231,12 @@ impl Report {
             test += &format!("  [{} replays]", self.replays);
         }
         format!(
-            "{:>5} {:<6}│   {:>5.2} {:>5.0}° {:>6.0} {:>5.2} │ {:>7.0}   {:>5.2} {:>5.2} {:>4} │   {:>5.2} {:>4.0}% {:>5.0}° {:>5.1} {:>5.3} │ {} {} {} {} {} {} │ {:>3.0} {:>6.0} {:>4.0} {:>4.0} │ {:>4.1}{test}",
+            "{:>5} {:<6}│   {:>5.2} {:>5.0}° {:>4.1}s {:>6.0} {:>5.2} │ {:>7.0}   {:>5.2} {:>5.2} {:>4} │   {:>5.2} {:>4.0}% {:>5.0}° {:>5.1} {:>5.3} │ {} {} {} {} {} {} │ {:>3.0} {:>6.0} {:>4.0} {:>4.0} │ {:>4.1}{test}",
             self.generation,
             self.stage,
             self.top_quality,
             self.top_angle,
+            self.top_hold,
             self.top_score,
             self.top_laps,
             self.saved_fitness,
@@ -313,6 +324,7 @@ impl Report {
             ("mean_progress", self.mean_progress),
             ("drift_share", self.drift_share),
             ("drift_angle", self.drift_angle),
+            ("drift_hold", self.drift_hold),
             ("zones", self.zones),
             ("clutch_pedal", self.clutch_pedal),
             ("clutch_slip", self.clutch_slip),
@@ -328,6 +340,7 @@ impl Report {
             ("mean_quality", self.mean_quality),
             ("top_quality", self.top_quality),
             ("top_angle", self.top_angle),
+            ("top_hold", self.top_hold),
             ("top_score", self.top_score),
             ("top_laps", self.top_laps),
             ("spins", self.spins),

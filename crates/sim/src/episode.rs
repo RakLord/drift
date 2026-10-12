@@ -109,12 +109,24 @@ pub struct EpisodeStats {
     pub max_angle: f64,
     /// Seconds spent above 20 degrees of drift angle (moving).
     pub above_20_time: f64,
+    /// Flow credit x seconds while drifting (see `scoring::flow`): angle
+    /// points' shape x how long each side was held.
+    #[serde(default)]
+    pub flow_seconds: f64,
+    /// Sides drifted: starts, transitions and flicks.
+    #[serde(default)]
+    pub drift_sides: u32,
 }
 
 impl EpisodeStats {
     /// Average drift angle while drifting, degrees.
     pub fn average_angle(&self) -> f64 {
         if self.drift_time > 0.0 { self.angle_seconds / self.drift_time } else { 0.0 }
+    }
+
+    /// Average seconds each side of a drift was held.
+    pub fn average_hold(&self) -> f64 {
+        if self.drift_sides > 0 { self.drift_time / f64::from(self.drift_sides) } else { 0.0 }
     }
 }
 
@@ -315,7 +327,9 @@ impl Episode {
         if self.scorer.drift.active {
             stats.drift_time += TICK;
             stats.angle_seconds += self.world.car.state.body_slip_angle().abs().to_degrees() * TICK;
+            stats.flow_seconds += self.scorer.flow.credit * TICK;
         }
+        stats.drift_sides = self.scorer.flow.sides;
 
         let time = self.tick as f64 * TICK;
         let running = self.world.car.state.engine_running();

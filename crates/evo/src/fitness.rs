@@ -1,9 +1,10 @@
 //! Fitness, shaped by a curriculum.
 //!
-//! Drifting is rewarded from the very first generation, on raw angle-time
-//! rather than banked combo points, and multiplies the driving reward so a
-//! car that slides and survives beats one that grips: `fitness = (progress +
-//! time alive) x (1 + drift_bonus x drift_quality) + judged score terms`.
+//! Drifting is rewarded from the very first generation, on flow (big angle,
+//! each side held long, linked smoothly) rather than banked combo points, and
+//! multiplies the driving reward so a car that slides and survives beats one
+//! that grips: `fitness = (progress + time alive) x (1 + drift_bonus x
+//! drift_quality) + judged score terms`.
 //! Holding the clutch (rather than kicking it) scales a run's reward down,
 //! harder the more sideways the car is.
 //! Shaping stages also soften the scoring rules (drift counts from a few
@@ -14,9 +15,6 @@ use sim::episode::{EpisodeConfig, EpisodeResult};
 use sim::scoring::ScoringParams;
 
 use crate::GaConfig;
-
-/// Angle-seconds per second that counts as a perfect drift quality of 1.
-pub const QUALITY_ANGLE_DEG: f64 = 45.0;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -123,10 +121,12 @@ impl Shaping {
     }
 }
 
-/// How much and how hard a run drifted, from raw angle-time: 1.0 = a 45
-/// degree drift held for the whole run. Doesn't depend on banking combos.
+/// How much and how smoothly a run drifted, from flow (`sim::scoring::flow`):
+/// 1.0 = a full-angle drift, each side held past the hold ramp, for the
+/// whole run; up to 1 + the hold bonus for sides held longer still. Quick
+/// flicks earn little. Doesn't depend on banking combos.
 pub fn drift_quality(r: &EpisodeResult) -> f64 {
-    r.stats.angle_seconds / (r.time.max(1e-9) * QUALITY_ANGLE_DEG)
+    r.stats.flow_seconds / r.time.max(1e-9)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -311,9 +311,9 @@ mod tests {
     fn drifting_multiplies_the_driving_reward() {
         let s = Stage { drift_bonus: 2.0, penalty: 0.0, ..stage(1.0, 0.0, None) };
         let grip = result(500.0, 0.0, 0.0);
-        // Same distance, but 15 s at 30 degrees over a 30 s run.
+        // Same distance, but 10 s of full flow credit over a 30 s run.
         let mut slide = result(500.0, 0.0, 0.0);
-        slide.stats.angle_seconds = 15.0 * 30.0;
+        slide.stats.flow_seconds = 10.0;
         let quality = drift_quality(&slide);
         assert!((quality - 1.0 / 3.0).abs() < 1e-9);
         assert_eq!(s.fitness(&[grip]), 500.0);

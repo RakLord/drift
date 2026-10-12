@@ -18,6 +18,9 @@ pub fn diversity(genomes: &[Genome]) -> f64 {
     if pairs == 0 { 0.0 } else { total / f64::from(pairs) }
 }
 
+/// Drift angle that counts as 1 in behaviour space.
+const ANGLE_SCALE_DEG: f64 = 45.0;
+
 /// Where a genome sits in behaviour space, averaged over its runs: share of
 /// a lap covered, share of time drifting, mean drift angle (/45 deg), and
 /// shares of time on the handbrake and clutch. Each is roughly 0..1.
@@ -29,7 +32,7 @@ pub fn behaviour(results: &[EpisodeResult]) -> [f64; 5] {
         let s = &r.stats;
         b[0] += r.laps().min(1.0);
         b[1] += s.drift_time / time;
-        b[2] += if s.drift_time > 0.0 { s.average_angle() / crate::fitness::QUALITY_ANGLE_DEG } else { 0.0 };
+        b[2] += if s.drift_time > 0.0 { s.average_angle() / ANGLE_SCALE_DEG } else { 0.0 };
         b[3] += s.handbrake_time / time;
         b[4] += s.clutch_time / time;
     }

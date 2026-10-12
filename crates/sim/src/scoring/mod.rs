@@ -4,6 +4,7 @@
 
 pub mod combo;
 pub mod drift;
+pub mod flow;
 pub mod params;
 
 use common::Vec2;
@@ -13,6 +14,7 @@ use crate::track::{SegmentKind, Track, TrackPoint, ZoneKind};
 use crate::world::Contact;
 pub use combo::{Breakdown, Combo};
 use drift::{DriftDetector, DriftEvent};
+use flow::Flow;
 pub use params::ScoringParams;
 use params::proximity;
 
@@ -69,6 +71,8 @@ struct Bobble {
 pub struct Scorer {
     pub params: ScoringParams,
     pub drift: DriftDetector,
+    /// Smoothness credit for training (see `flow`).
+    pub flow: Flow,
     pub combo: Combo,
     /// Everything banked so far (and penalties outside combos).
     pub total: Breakdown,
@@ -88,6 +92,7 @@ impl Scorer {
         Self {
             params,
             drift: DriftDetector::default(),
+            flow: Flow::default(),
             combo: Combo::default(),
             total: Breakdown::default(),
             zone_lit: vec![false; zones],
@@ -112,7 +117,9 @@ impl Scorer {
 
         self.check_hard_hits(contacts);
 
-        match self.drift.update(&self.params.drift, angle, state.speed(), forward, dt) {
+        let event = self.drift.update(&self.params.drift, angle, state.speed(), forward, dt);
+        self.flow.update(&self.params, event, self.drift.active, angle.abs().to_degrees(), on_verge, dt);
+        match event {
             DriftEvent::Started => {
                 self.combo.start();
                 self.bobble = Bobble { peak: angle.abs().to_degrees(), dip: None };
@@ -130,7 +137,7 @@ impl Scorer {
                 self.total.penalty += self.params.combo.spin_penalty;
                 self.emit(ScoreEventKind::Spin, -self.params.combo.spin_penalty);
             }
-            DriftEvent::None => {}
+            DriftEvent::Flick | DriftEvent::None => {}
         }
 
         let scoring = self.drift.active && self.combo.active && !on_verge;

@@ -70,6 +70,10 @@ impl ScoreHud {
                 centred(&format!("wall taps {}", combo.taps), cx, 148.0, 16.0, theme::TEXT_DIM);
             }
         }
+        if scorer.drift.active {
+            let hold = scorer.params.flow.hold_credit(scorer.flow.hold);
+            centred(&format!("flow x{hold:.2}"), cx, 166.0, 16.0, theme::TEXT_DIM);
+        }
 
         for (i, p) in self.popups.iter().rev().enumerate() {
             let t = (p.age / POPUP_SECS) as f32;
