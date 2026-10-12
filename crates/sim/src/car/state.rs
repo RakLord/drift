@@ -90,6 +90,11 @@ impl CarState {
         if v.length() < 0.5 { 0.0 } else { v.y.atan2(v.x) }
     }
 
+    /// World positions of the contact patches, indexed FL, FR, RL, RR.
+    pub fn wheel_positions(&self, params: &CarParams) -> [Vec2; 4] {
+        params.body.wheel_offsets().map(|offset| self.position + offset.rotate(self.heading))
+    }
+
     pub fn engine_rpm(&self) -> f64 {
         engine::rpm(self.drivetrain.engine_omega)
     }

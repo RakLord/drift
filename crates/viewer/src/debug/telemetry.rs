@@ -1,7 +1,6 @@
 //! Physics telemetry: force/velocity vectors in the world, and a panel of
 //! per-wheel friction circles plus drivetrain readouts.
 
-use common::Vec2;
 use macroquad::prelude::*;
 use sim::car::tyre;
 use sim::car::{CarParams, CarState};
@@ -15,9 +14,7 @@ const VELOCITY_SCALE: f64 = 0.25;
 
 /// World-space vectors. Call with the world camera active.
 pub fn draw_world(state: &CarState, params: &CarParams) {
-    let at = |local: Vec2| state.position + local.rotate(state.heading);
-    for (wheel, offset) in state.wheels.iter().zip(params.body.wheel_offsets()) {
-        let from = at(offset);
+    for (wheel, from) in state.wheels.iter().zip(state.wheel_positions(params)) {
         let force = wheel.force.rotate(state.heading) * FORCE_SCALE;
         draw_arrow(from, from + force, 0.07, theme::slip_color(wheel.combined_slip));
     }

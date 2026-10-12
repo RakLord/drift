@@ -3,6 +3,7 @@
 
 pub mod camera;
 pub mod car;
+pub mod effects;
 pub mod ground;
 pub mod hud;
 pub mod theme;

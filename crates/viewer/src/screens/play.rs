@@ -10,7 +10,7 @@ use sim::car::{Car, CarParams, CarState};
 
 use crate::debug::{gamepad_panel, history::History, telemetry};
 use crate::input::{autopilot::Autopilot, Input};
-use crate::render::{self, camera::FollowCamera, ground, hud, text, theme};
+use crate::render::{self, camera::FollowCamera, effects::Effects, ground, hud, text, theme};
 
 const TICK: f64 = 1.0 / 120.0;
 /// Never simulate more than this many ticks per frame (avoids a death spiral
@@ -31,9 +31,11 @@ pub struct PlayScreen {
     autopilot: Option<Autopilot>,
     camera: FollowCamera,
     history: History,
+    effects: Effects,
     accumulator: f64,
     time_scale_index: usize,
     paused: bool,
+    show_effects: bool,
     show_telemetry: bool,
     show_gamepad: bool,
     show_help: bool,
@@ -71,9 +73,11 @@ impl PlayScreen {
             autopilot: autopilot.then(Autopilot::new),
             camera: FollowCamera::new(START_POSITION),
             history: History::new(),
+            effects: Effects::new(),
             accumulator: 0.0,
             time_scale_index: 3,
             paused: false,
+            show_effects: true,
             show_telemetry: true,
             show_gamepad: false,
             show_help: true,
@@ -111,6 +115,7 @@ impl PlayScreen {
             self.previous = Pose::of(&self.car.state);
             self.car.step(controls, TICK);
             self.history.record(&self.car.state);
+            self.effects.on_tick(&self.car.state, &self.car.params, TICK);
             self.accumulator -= TICK;
             ticks += 1;
         }
@@ -130,7 +135,13 @@ impl PlayScreen {
 
         self.camera.apply();
         ground::draw(&self.camera);
+        if self.show_effects {
+            self.effects.draw_ground(&self.camera);
+        }
         render::car::draw(&state, &self.car.params);
+        if self.show_effects {
+            self.effects.draw_air();
+        }
         if self.show_telemetry {
             telemetry::draw_world(&state, &self.car.params);
         }
@@ -163,6 +174,7 @@ impl PlayScreen {
         self.previous = Pose::of(&self.car.state);
         self.camera.snap_to(START_POSITION);
         self.history.clear();
+        self.effects.clear();
         if self.autopilot.is_some() {
             self.autopilot = Some(Autopilot::new());
         }
@@ -174,6 +186,9 @@ impl PlayScreen {
         }
         if is_key_pressed(KeyCode::P) {
             self.paused = !self.paused;
+        }
+        if is_key_pressed(KeyCode::E) {
+            self.show_effects = !self.show_effects;
         }
         if is_key_pressed(KeyCode::T) {
             self.show_telemetry = !self.show_telemetry;
@@ -237,7 +252,7 @@ impl PlayScreen {
             &[
                 "pad: stick steer  RT throttle  LT brake  A/RB handbrake  X/LB clutch  Start reset",
                 "keys: WASD/arrows  Space handbrake  Shift clutch  R reset  P pause  [ ] speed  \
-                 T telemetry  G gamepad  H help  wheel zoom",
+                 E effects  T telemetry  G gamepad  H help  wheel zoom",
             ]
         } else {
             &["H: help"]

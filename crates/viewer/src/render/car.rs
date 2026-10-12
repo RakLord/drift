@@ -14,9 +14,9 @@ pub fn draw(state: &CarState, params: &CarParams) {
     draw_box(at(Vec2::new(-0.15, -0.2)), size, state.heading, theme::CAR_SHADOW);
 
     let tyre_size = Vec2::new(params.wheel.radius * 2.0, 0.24);
-    for (i, offset) in body.wheel_offsets().into_iter().enumerate() {
+    for (i, position) in state.wheel_positions(params).into_iter().enumerate() {
         let steer = if wheel::is_front(i) { state.steer_angle } else { 0.0 };
-        draw_box(at(offset), tyre_size, state.heading + steer, theme::TYRE);
+        draw_box(position, tyre_size, state.heading + steer, theme::TYRE);
     }
 
     draw_box(state.position, Vec2::new(size.x, size.y * 0.92), state.heading, theme::CAR_BODY);

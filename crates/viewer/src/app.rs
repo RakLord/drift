@@ -62,7 +62,13 @@ impl App {
         if let Some((path, frames)) = &self.options.screenshot
             && self.frame >= *frames
         {
-            get_screen_data().export_png(&path.to_string_lossy());
+            let mut image = get_screen_data();
+            // Blending leaves the framebuffer's alpha below 1 in places; a
+            // PNG viewer would show those pixels see-through.
+            for pixel in image.bytes.chunks_exact_mut(4) {
+                pixel[3] = 255;
+            }
+            image.export_png(&path.to_string_lossy());
             println!("saved {}", path.display());
             return Flow::Exit;
         }
