@@ -1,36 +1,17 @@
 //! Car-on-track behaviour: walls, verges, progress.
 
+mod support;
+
 use std::sync::Arc;
 
 use common::{Rng, Vec2};
 use sim::car::{CarParams, CarState};
-use sim::track::{EdgeKind, Track, TrackDef};
-use sim::track::def::AnchorDef;
+use sim::track::{EdgeKind, Track};
 use sim::{Controls, World};
+use support::{DT, KMH};
 
-const DT: f64 = 1.0 / 120.0;
-const KMH: f64 = 1.0 / 3.6;
-
-/// Two 200 m straights joined by radius-60 half circles. Driving +x along
-/// y = 0 first, so left is +y.
 fn oval(left: EdgeKind, right: EdgeKind) -> Arc<Track> {
-    let h = 0.5523 * 60.0;
-    let points = [
-        ([0.0, 0.0], [h, 0.0]),
-        ([200.0, 0.0], [h, 0.0]),
-        ([260.0, 60.0], [0.0, h]),
-        ([200.0, 120.0], [-h, 0.0]),
-        ([0.0, 120.0], [-h, 0.0]),
-        ([-60.0, 60.0], [0.0, -h]),
-    ];
-    let def = TrackDef {
-        version: 1,
-        name: "test oval".into(),
-        width: 12.0,
-        verge: 8.0,
-        anchors: points.iter().map(|&(pos, handle)| AnchorDef { pos, handle: Some(handle), left, right }).collect(),
-    };
-    Arc::new(Track::build(def).unwrap())
+    support::oval(left, right, vec![])
 }
 
 fn world_with(track: Arc<Track>, position: Vec2, heading: f64, velocity: Vec2) -> World {

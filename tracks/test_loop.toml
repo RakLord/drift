@@ -96,3 +96,54 @@ right = "hard"
 pos = [-60.0, 60.0]
 left = "soft"
 right = "soft"
+# Judged zones. Positions are section coordinates (anchor index + fraction).
+# Clips are judged on the front bumper, outer zones on the rear bumper.
+
+[[zones]]  # big left sweeper
+kind = "clip"
+at = 3.0
+side = "left"
+
+[[zones]]
+kind = "outer"
+from = 2.3
+to = 3.9
+side = "right"
+
+[[zones]]  # right-hand S
+kind = "clip"
+at = 6.0
+side = "right"
+
+[[zones]]
+kind = "outer"
+from = 5.4
+to = 6.8
+side = "left"
+
+[[zones]]  # left hairpin
+kind = "clip"
+at = 9.0
+side = "left"
+
+[[zones]]
+kind = "outer"
+from = 8.3
+to = 9.8
+side = "right"
+
+[[zones]]  # long left
+kind = "clip"
+at = 14.0
+side = "left"
+
+[[zones]]
+kind = "outer"
+from = 13.2
+to = 14.9
+side = "right"
+
+[[zones]]  # final left onto the straight
+kind = "clip"
+at = 16.6
+side = "left"

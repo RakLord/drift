@@ -7,12 +7,14 @@ use common::config::WatchedConfig;
 use common::math::{angle_diff, wrap_angle};
 use macroquad::prelude::*;
 use sim::car::{CarParams, CarState};
+use sim::scoring::{Scorer, ScoringParams};
 use sim::track::{Track, TrackDef};
 use sim::World;
 
 use crate::debug::{gamepad_panel, history::History, telemetry};
 use crate::input::{Input, autopilot::Autopilot};
 use crate::paths::workspace_file;
+use crate::render::score::ScoreHud;
 use crate::render::{self, camera::FollowCamera, effects::Effects, ground, hud, text, theme, track::TrackMesh};
 
 const TICK: f64 = 1.0 / 120.0;
@@ -23,15 +25,19 @@ const CONFIG_POLL_SECS: f64 = 0.5;
 const TIME_SCALES: [f64; 5] = [0.1, 0.25, 0.5, 1.0, 2.0];
 
 const CAR_FILE: &str = "config/car.toml";
+const SCORING_FILE: &str = "config/scoring.toml";
 const TRACK_FILE: &str = "tracks/test_loop.toml";
 const BUILT_IN_TRACK: &str = include_str!("../../../../tracks/test_loop.toml");
 
 pub struct PlayScreen {
     world: World,
     mesh: TrackMesh,
+    scorer: Scorer,
+    score_hud: ScoreHud,
     previous: Pose,
     car_config: Option<WatchedConfig<CarParams>>,
     track_config: Option<WatchedConfig<TrackDef>>,
+    scoring_config: Option<WatchedConfig<ScoringParams>>,
     config_timer: f64,
     input: Input,
     autopilot: Option<Autopilot>,
@@ -76,15 +82,24 @@ impl PlayScreen {
             .and_then(|c| Track::build(c.get().clone()).map_err(|err| warnings.push(format!("track: {err}"))).ok())
             .unwrap_or_else(built_in_track);
 
+        let scoring_config = WatchedConfig::<ScoringParams>::load(workspace_file(SCORING_FILE))
+            .map_err(|err| warnings.push(format!("using built-in scoring: {err}")))
+            .ok();
+        let scoring = scoring_config.as_ref().map_or_else(ScoringParams::default, |c| c.get().clone());
+
         let mesh = TrackMesh::new(&track);
+        let scorer = Scorer::new(scoring, &track);
         let world = World::new(Arc::new(track), params);
         let start = world.car.state.position;
         Self {
             previous: Pose::of(&world.car.state),
             world,
             mesh,
+            scorer,
+            score_hud: ScoreHud::new(),
             car_config,
             track_config,
+            scoring_config,
             config_timer: 0.0,
             input: Input::new(),
             autopilot: autopilot.then(Autopilot::new),
@@ -113,6 +128,8 @@ impl PlayScreen {
             }
         }
 
+        self.score_hud.update(dt);
+
         // Read input every frame (the gamepad needs polling) even if paused.
         let input = self.input.controls(dt);
         if self.input.reset_pressed() {
@@ -133,6 +150,8 @@ impl PlayScreen {
             self.world.step(controls, TICK);
             let car = &self.world.car;
             self.effects.on_tick(&car.state, &car.params, self.world.contacts(), TICK);
+            let events = self.scorer.update(&self.world, self.world.contacts(), TICK);
+            self.score_hud.on_events(events);
             self.history.record(&car.state);
             self.accumulator -= TICK;
             ticks += 1;
@@ -155,6 +174,7 @@ impl PlayScreen {
         self.camera.apply();
         ground::draw(&self.camera);
         self.mesh.draw(&self.camera);
+        self.mesh.draw_zones(&self.scorer.zone_lit);
         if self.show_effects {
             self.effects.draw_ground(&self.camera, &car.params);
         }
@@ -169,6 +189,7 @@ impl PlayScreen {
         set_default_camera();
         hud::draw(&state, &car.params);
         hud::draw_track_info(&self.world);
+        self.score_hud.draw(&self.scorer);
         if self.show_telemetry {
             telemetry::draw_panel(&state, &car.params);
             self.history.draw();
@@ -196,6 +217,8 @@ impl PlayScreen {
         self.camera.snap_to(self.world.car.state.position);
         self.history.clear();
         self.effects.clear();
+        self.scorer = Scorer::new(self.scorer.params.clone(), &self.world.track);
+        self.score_hud.clear();
         if self.autopilot.is_some() {
             self.autopilot = Some(Autopilot::new());
         }
@@ -250,6 +273,17 @@ impl PlayScreen {
             }
         }
 
+        if let Some(config) = &mut self.scoring_config {
+            match config.poll() {
+                Some(Ok(())) => {
+                    self.scorer.params = config.get().clone();
+                    self.toast = Some(("scoring.toml reloaded".to_owned(), 2.0));
+                }
+                Some(Err(err)) => self.toast = Some((format!("scoring.toml rejected: {err}"), 6.0)),
+                None => {}
+            }
+        }
+
         if let Some(config) = &mut self.track_config {
             match config.poll() {
                 Some(Ok(())) => match Track::build(config.get().clone()) {
@@ -281,10 +315,10 @@ impl PlayScreen {
             status.push("AUTOPILOT".to_owned());
         }
         if !status.is_empty() {
-            text(&status.join("   "), w / 2.0 - 80.0, 40.0, 28.0, theme::SODIUM);
+            text(&status.join("   "), w / 2.0 - 80.0, h - 70.0, 28.0, theme::SODIUM);
         }
         if let Some((message, _)) = &self.toast {
-            text(message, w / 2.0 - 160.0, 72.0, 22.0, theme::NEON_CYAN);
+            text(message, w / 2.0 - 160.0, h - 100.0, 22.0, theme::NEON_CYAN);
         }
 
         let help: &[&str] = if self.show_help {

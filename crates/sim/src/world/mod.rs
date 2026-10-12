@@ -20,6 +20,8 @@ pub struct World {
     /// Signed distance driven along the track since the start, metres.
     /// Going backwards counts negative; laps keep adding up.
     pub progress: f64,
+    /// What each wheel was on during the last tick (FL, FR, RL, RR).
+    pub ground: [Ground; 4],
     contacts: Vec<Contact>,
     scratch: Vec<u32>,
 }
@@ -29,7 +31,7 @@ impl World {
         let (position, heading) = track.start();
         let car = Car::new(params, position, heading);
         let place = track.project(position, None);
-        Self { track, car, place, progress: 0.0, contacts: vec![], scratch: vec![] }
+        Self { track, car, place, progress: 0.0, ground: [Ground::ASPHALT; 4], contacts: vec![], scratch: vec![] }
     }
 
     /// Put the car back at the start, standing still.
@@ -57,9 +59,9 @@ impl World {
         self.contacts.clear();
         let hint = Some(self.place.index);
         let wheels = self.car.state.wheel_positions(&self.car.params);
-        let ground: [Ground; 4] = wheels.map(|p| self.track.ground_at(p, hint));
+        self.ground = wheels.map(|p| self.track.ground_at(p, hint));
 
-        self.car.step_on(controls, &ground, dt);
+        self.car.step_on(controls, &self.ground, dt);
         collision::resolve(&self.track, &mut self.car, &mut self.scratch, &mut self.contacts);
 
         let place = self.track.project(self.car.state.position, hint);

@@ -7,6 +7,7 @@ pub mod boundary;
 pub mod centreline;
 pub mod def;
 pub mod grid;
+pub mod zones;
 
 use std::fmt;
 
@@ -19,6 +20,7 @@ use centreline::Sample;
 pub use def::{EdgeKind, TrackDef};
 use def::FORMAT_VERSION;
 pub use grid::RayHit;
+pub use zones::{Zone, ZoneKind};
 use grid::SegmentGrid;
 
 /// Grass verge: much less grip, and it drags.
@@ -33,6 +35,7 @@ pub struct Track {
     pub samples: Vec<Sample>,
     pub length: f64,
     pub segments: Vec<Segment>,
+    pub zones: Vec<Zone>,
     grid: SegmentGrid,
 }
 
@@ -55,6 +58,7 @@ pub enum TrackError {
     TooFewAnchors,
     TooTight { distance: f64, radius: f64, needed: f64 },
     SelfIntersecting { at: Vec2 },
+    Zone(String),
 }
 
 impl fmt::Display for TrackError {
@@ -66,6 +70,7 @@ impl fmt::Display for TrackError {
                 write!(f, "corner at {distance:.0} m has radius {radius:.1} m, needs at least {needed:.1} m")
             }
             Self::SelfIntersecting { at } => write!(f, "boundaries cross near ({:.0}, {:.0})", at.x, at.y),
+            Self::Zone(message) => write!(f, "zone: {message}"),
         }
     }
 }
@@ -95,7 +100,8 @@ impl Track {
 
         let segments = boundary::build(&samples, half_width, def.verge, edge);
         let grid = SegmentGrid::build(&segments);
-        let track = Self { def, samples, length, segments, grid };
+        let zones = zones::resolve(&def, &samples, length).map_err(|e| TrackError::Zone(e.0))?;
+        let track = Self { def, samples, length, segments, zones, grid };
         track.check_intersections()?;
         Ok(track)
     }
@@ -188,6 +194,12 @@ impl Track {
         }
     }
 
+    /// Whether `distance` lies between `start` and `end` going forwards,
+    /// handling ranges that wrap past the start line.
+    pub fn in_range(&self, distance: f64, start: f64, end: f64) -> bool {
+        if start <= end { (start..=end).contains(&distance) } else { distance >= start || distance <= end }
+    }
+
     /// Heading of the track at a sample, radians.
     pub fn heading_at(&self, index: usize) -> f64 {
         self.samples[index].tangent.angle()
@@ -246,6 +258,7 @@ mod tests {
             width: 12.0,
             verge: 8.0,
             anchors: points.iter().map(|&(pos, handle)| AnchorDef { pos, handle: Some(handle), left, right }).collect(),
+            zones: vec![],
         }
     }
 

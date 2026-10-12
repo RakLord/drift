@@ -57,7 +57,8 @@ impl History {
 
     pub fn draw(&self) {
         let (w, h) = (420.0, 140.0);
-        let (x, y) = (16.0, 16.0);
+        // Below the score HUD at the top centre.
+        let (x, y) = (16.0, 170.0);
         draw_rectangle(x, y, w, h, theme::PANEL);
         let mid = y + h / 2.0;
         draw_line(x, mid, x + w, mid, 1.0, theme::GRID_MAJOR);

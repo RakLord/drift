@@ -5,6 +5,7 @@
 
 pub mod car;
 pub mod controls;
+pub mod scoring;
 pub mod track;
 pub mod world;
 

@@ -1,6 +1,7 @@
 //! Track boundaries as line segments: walls, painted edges, verge fences.
 
 use common::Vec2;
+use serde::{Deserialize, Serialize};
 
 use super::centreline::Sample;
 use super::def::EdgeKind;
@@ -34,7 +35,8 @@ pub struct Segment {
 }
 
 /// Which side of the driving direction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Side {
     Left,
     Right,

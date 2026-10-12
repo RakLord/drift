@@ -3,7 +3,7 @@
 
 use common::Vec2;
 use macroquad::prelude::*;
-use sim::track::{EdgeKind, Side, Track};
+use sim::track::{EdgeKind, Side, Track, ZoneKind};
 
 use super::camera::FollowCamera;
 use super::{draw_box, draw_segment, theme, to_mq};
@@ -13,6 +13,9 @@ const WALL_BLOCK: usize = 4; // samples per alternating barrier block
 const PAINT_WIDTH: f64 = 0.18;
 const PAINT_INSET: f64 = 0.3;
 const FENCE_POST_EVERY: usize = 5;
+const ZONE_WIDTH: f64 = 1.6;
+const ZONE_STRIPE: usize = 2; // samples per stripe
+const CLIP_RADIUS: f64 = 0.6;
 
 /// Per-sample cross-section points, from the centreline outwards.
 struct Slice {
@@ -25,8 +28,20 @@ struct Slice {
     kind: [EdgeKind; 2],
 }
 
+/// A judged zone, ready to draw.
+struct ZoneMesh {
+    kind: ZoneKind,
+    /// 0 = left, 1 = right.
+    side: usize,
+    /// Outer zones: the samples it covers, in driving order.
+    samples: Vec<usize>,
+    /// Clips: the clipping point.
+    point: Vec2,
+}
+
 pub struct TrackMesh {
     slices: Vec<Slice>,
+    zones: Vec<ZoneMesh>,
     half_width: f64,
     verge: f64,
 }
@@ -52,7 +67,24 @@ impl TrackMesh {
                 }
             })
             .collect();
-        Self { slices, half_width: half, verge }
+        let zones = track
+            .zones
+            .iter()
+            .map(|z| {
+                let n = track.samples.len();
+                let first = track.samples.iter().position(|s| s.distance >= z.start).unwrap_or(0);
+                let samples = match z.kind {
+                    ZoneKind::Outer => (0..n)
+                        .map(|k| (first + k) % n)
+                        .take_while(|&i| track.in_range(track.samples[i].distance, z.start, z.end))
+                        .collect(),
+                    ZoneKind::Clip => vec![],
+                };
+                let side = if z.side == Side::Left { 0 } else { 1 };
+                ZoneMesh { kind: z.kind, side, samples, point: z.point }
+            })
+            .collect();
+        Self { slices, zones, half_width: half, verge }
     }
 
     pub fn draw(&self, camera: &FollowCamera) {
@@ -99,6 +131,35 @@ impl TrackMesh {
             }
         }
         self.draw_start_line();
+    }
+
+    /// Zones painted on the asphalt; `lit[i]` brightens zone `i` while it is
+    /// being scored.
+    pub fn draw_zones(&self, lit: &[bool]) {
+        for (zone, &lit) in self.zones.iter().zip(lit.iter().chain(std::iter::repeat(&false))) {
+            match zone.kind {
+                ZoneKind::Outer => {
+                    let sign = if zone.side == 0 { 1.0 } else { -1.0 };
+                    let (bright, dim) = if lit { (0.85, 0.45) } else { (0.35, 0.12) };
+                    for (k, pair) in zone.samples.windows(2).enumerate() {
+                        let (a, b) = (&self.slices[pair[0]], &self.slices[pair[1]]);
+                        let inner_a = a.edge[zone.side] - a.normal * (sign * ZONE_WIDTH);
+                        let inner_b = b.edge[zone.side] - b.normal * (sign * ZONE_WIDTH);
+                        let alpha = if (k / ZONE_STRIPE).is_multiple_of(2) { bright } else { dim };
+                        let color = Color { a: alpha, ..theme::NEON_PINK };
+                        quad(a.edge[zone.side], b.edge[zone.side], inner_b, inner_a, color);
+                    }
+                }
+                ZoneKind::Clip => {
+                    let p = to_mq(zone.point);
+                    if lit {
+                        draw_circle(p.x, p.y, (CLIP_RADIUS * 2.5) as f32, Color { a: 0.25, ..theme::SODIUM });
+                    }
+                    draw_circle(p.x, p.y, CLIP_RADIUS as f32, theme::SODIUM);
+                    draw_circle(p.x, p.y, (CLIP_RADIUS * 0.45) as f32, theme::EDGE_PAINT);
+                }
+            }
+        }
     }
 
     fn draw_start_line(&self) {

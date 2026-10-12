@@ -10,8 +10,13 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `viewer`: free-drive screen with gamepad/keyboard, telemetry, smoke, skid marks, live car.toml reload
 
 **In progress: M1**
-- Done: Bezier tracks (`sim/track`, `tracks/test_loop.toml`), hard/soft edges, verge grip, wall collisions (`sim/world`), track rendering, sparks, cosmetic bumper damage. Track files hot-reload in the viewer.
-- Next: procedural generator, zones, scoring, driver prep, game HUD.
+- Done:
+  - Bezier tracks (`sim/track`, `tracks/test_loop.toml`), hard/soft edges, verge grip
+  - wall collisions (`sim/world`)
+  - track rendering, sparks, cosmetic bumper damage
+  - zones and scoring (`sim/scoring`, `config/scoring.toml`), score HUD with popups
+  - track, car and scoring files all hot-reload in the viewer
+- Next: procedural generator, driver prep.
 
 **Conventions**
 - The sim uses `f64` (SI units). The NN will use `f32`.
@@ -112,6 +117,28 @@ Good driving and drift physics is what gives this project value. The GA will als
   5. Tracks can also be run mirrored or reversed.
 - **Track library:** about 15 approved tracks, saved to disk. A good generated track can be approved into the library. Some library tracks are held out as **test tracks** that are never trained on.
 - **Bezier editor:** later, not v1.
+
+## Scoring
+
+All numbers live in `config/scoring.toml` (hot-reloaded).
+
+- **Zones** sit in the track file, positioned in section coordinates (anchor index + fraction), so they stay with their corner when anchors move.
+  - **Clip point** (inside edge): scored on the **front bumper**'s closest approach while drifting. Pays out once per lap.
+  - **Outer zone** (outside edge): scored on the **rear bumper**'s proximity to the edge, per second, while drifting through it.
+- **Drifting:** angle ≥ 12°, speed ≥ 25 km/h, moving forwards along the track. The drift ends after 0.3 s below 8° (a clean exit). Over 100° is a spin.
+- **Points per second while drifting**, × a speed multiplier (0.5× at 30 km/h → 1.5× at 100 km/h):
+  - **Angle:** ramps up from 12°, full at 40–65°, tapers off towards a spin.
+  - **Line:** clips + outer zones.
+  - **Style:**
+    - transitions (linking direction changes) are a bonus
+    - wall taps are a bonus: rear bumper into a hard wall at 0.3–3 m/s; at most one per 2 s and 2 per combo, so they can't be farmed
+    - bobbles (angle dips sharply then recovers) are a penalty
+- **Combo:** points pile up × a multiplier.
+  - The multiplier gets +0.1× per zone, transition or tap, capped at 3×.
+  - It's banked on a clean exit.
+  - A spin or a hard wall hit (≥ 3.5 m/s) loses it and adds a penalty.
+  - All four wheels on the verge pauses scoring (no points, combo kept).
+- The **Line/Angle/Style breakdown** is kept separately for metrics and fitness.
 
 ## Driver prep
 
