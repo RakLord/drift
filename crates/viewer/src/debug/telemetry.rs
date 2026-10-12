@@ -58,8 +58,9 @@ pub fn draw_panel(state: &CarState, params: &CarParams) {
     let d = &state.drivetrain;
     let clutch = if d.clutch_locked { "locked" } else { "slipping" };
     let limiter = if d.limiter_active { "  LIMITER" } else { "" };
+    let stalled = if d.engine_running { "" } else { "  STALLED" };
     let readouts = [
-        format!("rpm {:.0}  clutch {clutch}{limiter}", state.engine_rpm()),
+        format!("rpm {:.0}  clutch {clutch} {:.0}°C{limiter}{stalled}", state.engine_rpm(), d.clutch_temp),
         format!(
             "yaw {:+.2} rad/s  accel {:+.2} {:+.2} g",
             state.yaw_rate,

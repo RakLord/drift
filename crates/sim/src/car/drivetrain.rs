@@ -5,16 +5,38 @@
 //! passing at most its capacity in torque. A clutch kick is this model doing
 //! its thing: pedal in, the engine revs up freely; pedal out, the clutch locks
 //! and dumps that spinning energy into the rear tyres.
+//!
+//! Slipping heats the clutch, and a hot clutch fades. Nothing stops the
+//! engine stalling: held below stall revs it dies until restarted.
 
 use super::engine;
 use super::params::CarParams;
 use super::wheel::SpinStep;
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct DrivetrainState {
     pub engine_omega: f64,
     pub clutch_locked: bool,
     pub limiter_active: bool,
+    /// False once stalled, until restarted.
+    pub engine_running: bool,
+    /// Clutch temperature, degC.
+    pub clutch_temp: f64,
+    /// How long the engine has been below stall revs, seconds.
+    pub below_stall: f64,
+}
+
+impl Default for DrivetrainState {
+    fn default() -> Self {
+        Self {
+            engine_omega: 0.0,
+            clutch_locked: false,
+            limiter_active: false,
+            engine_running: true,
+            clutch_temp: 0.0,
+            below_stall: 0.0,
+        }
+    }
 }
 
 /// Rear tyre forces linearised around the current axle spin (see `SpinStep`).
@@ -34,13 +56,44 @@ pub fn step(
     clutch_pedal: f64,
     dt: f64,
 ) -> f64 {
+    let new_axle = shafts(p, state, axle_omega, axle, throttle, clutch_pedal, dt);
+    let c = &p.clutch;
+    state.clutch_temp -= c.cooling * (state.clutch_temp - c.ambient_temp) / c.heat_capacity * dt;
+    // An engine has momentum and keeps firing through a brief dip; it only
+    // dies if it stays too slow.
+    if state.engine_running && engine::rpm(state.engine_omega) < p.engine.stall_rpm {
+        state.below_stall += dt;
+        if state.below_stall >= p.engine.stall_secs {
+            state.engine_running = false;
+        }
+    } else {
+        state.below_stall = 0.0;
+    }
+    new_axle
+}
+
+/// Engine, clutch and axle for one substep.
+fn shafts(
+    p: &CarParams,
+    state: &mut DrivetrainState,
+    axle_omega: f64,
+    axle: &AxleLoad,
+    throttle: f64,
+    clutch_pedal: f64,
+    dt: f64,
+) -> f64 {
     let ratio = p.drivetrain.ratio;
     let engine_inertia = p.engine.inertia;
     let axle_inertia = 2.0 * p.wheel.inertia + p.drivetrain.inertia;
 
-    let throttle = engine::effective_throttle(&p.engine, state.engine_omega, throttle, &mut state.limiter_active);
+    // A stalled engine makes no power (and no idle): only friction.
+    let throttle = if state.engine_running {
+        engine::effective_throttle(&p.engine, state.engine_omega, throttle, &mut state.limiter_active)
+    } else {
+        0.0
+    };
     let engine_torque = engine::torque(&p.engine, state.engine_omega, throttle);
-    let capacity = engine::clutch_capacity(&p.clutch, clutch_pedal, state.engine_omega);
+    let capacity = engine::clutch_capacity(&p.clutch, clutch_pedal, state.clutch_temp);
 
     let spin = |inertia: f64, drive_torque: f64| SpinStep {
         inertia,
@@ -69,8 +122,11 @@ pub fn step(
         slip_direction = clutch_torque.signum();
     }
 
-    // Slipping: the clutch passes its full capacity in the direction of slip.
+    // Slipping: the clutch passes its full capacity in the direction of slip,
+    // turning torque x slip speed into heat.
     let clutch_torque = capacity * slip_direction;
+    let slip_speed = (state.engine_omega - ratio * axle_omega).abs();
+    state.clutch_temp += clutch_torque.abs() * slip_speed * dt / p.clutch.heat_capacity;
     let new_engine = (state.engine_omega + dt * (engine_torque - clutch_torque) / engine_inertia).max(0.0);
     let new_axle = spin(axle_inertia, ratio * clutch_torque).solve(dt);
 

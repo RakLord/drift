@@ -137,6 +137,7 @@ impl PlayScreen {
             show_help: true,
             toast: (!warnings.is_empty()).then(|| (warnings.join("; "), 8.0)),
         };
+        screen.reset(); // rolling start
         if let Some(ai) = &screen.ai {
             // Drive with the settings the genome was trained with.
             if let Some(car) = &ai.run.car {
@@ -168,6 +169,9 @@ impl PlayScreen {
         if self.input.reset_pressed() {
             self.reset();
         }
+        if self.input.restart_pressed() {
+            self.world.car.restart_engine();
+        }
         if self.paused {
             return;
         }
@@ -196,7 +200,7 @@ impl PlayScreen {
             ticks += 1;
             // While the AI drives, runs end exactly as in training.
             if let Some(ai) = self.ai.as_mut().filter(|ai| ai.enabled)
-                && let Some(end) = ai.check_end(self.world.progress, events)
+                && let Some(end) = ai.check_end(self.world.progress, self.world.car.state.engine_running(), events)
             {
                 run_over = Some(end);
                 break;
@@ -289,12 +293,19 @@ impl PlayScreen {
 
     fn reset(&mut self) {
         self.world.reset();
+        // Rolling start (Formula Drift style, and it's how the AI trains),
+        // except doughnut mode, which pulls away from a standstill.
+        let mut speed = Some(crate::input::ai::DEFAULT_START_SPEED_KMH / 3.6);
         if let Some(ai) = &mut self.ai {
-            // Newest genome (if one arrived), rolling start, as in training.
+            // Newest genome (if one arrived), started as in training.
             ai.take_pending();
             ai.reset();
+            speed = Some(ai.start_speed());
+        } else if self.autopilot.as_ref().is_some_and(Autopilot::starts_at_rest) {
+            speed = None;
+        }
+        if let Some(speed) = speed {
             let (position, heading) = self.world.track.start();
-            let speed = ai.start_speed();
             self.world.set_car_state(sim::car::CarState::rolling(&self.world.car.params, position, heading, speed));
         }
         self.previous = Pose::of(&self.world.car.state);
@@ -478,7 +489,7 @@ impl PlayScreen {
                 "pad: stick steer  RT throttle  LT brake  A/RB handbrake  X/LB clutch  Start reset",
                 "keys: WASD/arrows  Space handbrake  Shift clutch  R reset  P pause  [ ] speed  wheel zoom",
                 "N new track  F generator  L library track  K keep track  M map  E effects  T telemetry  G gamepad  H help",
-                "AI (--genome / --follow): Tab take over / hand back  I inputs panel  B load newest best now",
+                "Y / pad Select: restart a stalled engine   AI (--genome / --follow): Tab take over  I inputs  B newest best",
             ]
         } else {
             &["H: help"]

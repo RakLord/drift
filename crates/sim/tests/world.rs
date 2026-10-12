@@ -131,7 +131,10 @@ fn verge_slows_the_car_more_than_asphalt() {
 fn progress_counts_a_full_lap() {
     let track = oval(EdgeKind::Soft, EdgeKind::Soft);
     let length = track.length;
-    let mut world = World::new(track, CarParams::default());
+    let params = CarParams::default();
+    let (start, heading) = track.start();
+    let mut world = World::new(track, params.clone());
+    world.set_car_state(CarState::rolling(&params, start, heading, 40.0 * KMH));
     let mut ticks = 0;
     while world.progress < length * 1.1 && ticks < 120 * 120 {
         let controls = follow_centreline(&world, 0.45);

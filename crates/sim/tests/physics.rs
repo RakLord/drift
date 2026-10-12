@@ -46,25 +46,55 @@ fn drive_until(
     t
 }
 
-fn full_throttle(_: &CarState, _: f64) -> Controls {
-    Controls { throttle: 1.0, ..Default::default() }
+/// Pull away like a driver: clutch in while the revs build, ease it out over
+/// most of a second, then flat out.
+fn launch(_: &CarState, t: f64) -> Controls {
+    let clutch = 1.0 - ((t - 0.4) / 0.8).clamp(0.0, 1.0);
+    Controls { throttle: 1.0, clutch, ..Default::default() }
 }
 
 #[test]
-fn stays_at_rest_with_no_input() {
+fn idles_at_rest_with_the_clutch_in() {
     let mut car = car_at_rest();
-    drive(&mut car, 10.0, |_, _| Controls::default());
+    drive(&mut car, 10.0, |_, _| Controls { clutch: 1.0, ..Default::default() });
     assert!(car.state.position.length() < 1e-3, "crept {:?}", car.state.position);
     assert!(car.state.speed() < 1e-3);
     assert!(car.state.yaw_rate.abs() < 1e-6);
+    assert!(car.state.engine_running());
     let idle = car.params.engine.idle_rpm;
     assert!((car.state.engine_rpm() - idle).abs() < 300.0, "rpm {}", car.state.engine_rpm());
 }
 
 #[test]
+fn stalls_at_rest_with_the_clutch_out() {
+    let mut car = car_at_rest();
+    drive(&mut car, 2.0, |_, _| Controls::default());
+    assert!(!car.state.engine_running(), "should have stalled");
+    // It lurches forward a little before dying, like a real car.
+    assert!(car.state.speed() < 2.0, "lurched to {:.2} m/s", car.state.speed());
+
+    // Clutch in and turn the key: back to idle.
+    car.restart_engine();
+    drive(&mut car, 1.0, |_, _| Controls { clutch: 1.0, ..Default::default() });
+    assert!(car.state.engine_running());
+}
+
+#[test]
+fn dropping_the_clutch_at_idle_stalls_but_a_proper_launch_does_not() {
+    let mut dropped = car_at_rest();
+    drive(&mut dropped, 2.0, |_, _| Controls { throttle: 0.3, ..Default::default() });
+    assert!(!dropped.state.engine_running());
+
+    let mut launched = car_at_rest();
+    drive(&mut launched, 3.0, launch);
+    assert!(launched.state.engine_running());
+    assert!(launched.state.speed() > 10.0);
+}
+
+#[test]
 fn zero_to_hundred_is_plausible_and_straight() {
     let mut car = car_at_rest();
-    let t = drive_until(&mut car, 20.0, &mut full_throttle, |s| s.speed() >= 100.0 * KMH);
+    let t = drive_until(&mut car, 20.0, &mut launch, |s| s.speed() >= 100.0 * KMH);
     println!("0-100 km/h: {t:.2} s");
     assert!((3.5..9.0).contains(&t), "0-100 took {t:.2} s");
     assert!(car.state.position.y.abs() < 0.05, "pulled sideways {}", car.state.position.y);
@@ -74,7 +104,7 @@ fn zero_to_hundred_is_plausible_and_straight() {
 #[test]
 fn top_speed_is_capped_by_rev_limiter() {
     let mut car = car_at_rest();
-    drive(&mut car, 60.0, full_throttle);
+    drive(&mut car, 60.0, launch);
     let kmh = car.state.speed() / KMH;
     println!("top speed: {kmh:.0} km/h, {:.0} rpm", car.state.engine_rpm());
     assert!((100.0..200.0).contains(&kmh), "top speed {kmh:.0} km/h");
@@ -148,12 +178,77 @@ fn handbrake_turn_rotates_the_car() {
 }
 
 #[test]
-fn handbrake_locks_rears_without_stalling() {
+fn handbrake_with_the_clutch_in_locks_the_rears_and_spares_the_engine() {
     let mut car = car_rolling(40.0 * KMH);
-    drive(&mut car, 0.5, |_, _| Controls { handbrake: 1.0, ..Default::default() });
+    drive(&mut car, 0.5, |_, _| Controls { handbrake: 1.0, clutch: 1.0, ..Default::default() });
     assert!(car.state.wheels[RL].omega.abs() < 0.5, "rears still spinning {}", car.state.wheels[RL].omega);
+    assert!(car.state.engine_running());
     let idle = car.params.engine.idle_rpm;
     assert!(car.state.engine_rpm() > idle * 0.7, "engine dragged to {:.0} rpm", car.state.engine_rpm());
+}
+
+#[test]
+fn a_quick_handbrake_yank_in_gear_does_not_stall() {
+    // In gear the engine's inertia (times the ratio squared) is on the rear
+    // axle, so a short pull drops the revs but they recover.
+    let mut car = car_rolling(60.0 * KMH);
+    let mut lowest: f64 = f64::MAX;
+    drive(&mut car, 2.0, |s, t| {
+        lowest = lowest.min(s.engine_rpm());
+        Controls { throttle: 0.5, handbrake: if t < 0.2 { 1.0 } else { 0.0 }, ..Default::default() }
+    });
+    println!("quick yank in gear: revs dipped to {lowest:.0} rpm");
+    assert!(car.state.engine_running(), "stalled (revs dipped to {lowest:.0})");
+}
+
+#[test]
+fn holding_the_handbrake_in_gear_stalls() {
+    let mut car = car_rolling(40.0 * KMH);
+    let mut stalled_at = None;
+    drive(&mut car, 3.0, |s, t| {
+        if stalled_at.is_none() && !s.engine_running() {
+            stalled_at = Some(t);
+        }
+        Controls { handbrake: 1.0, ..Default::default() }
+    });
+    println!("held handbrake in gear: stalled after {stalled_at:?} s");
+    assert!(stalled_at.is_some(), "never stalled");
+}
+
+#[test]
+fn riding_the_clutch_cooks_it_and_it_fades() {
+    // Revs pinned, clutch slipping, speed held down (here by the brakes):
+    // the way the AI was riding it.
+    let mut car = car_at_rest();
+    drive(&mut car, 15.0, |_, t| Controls {
+        throttle: 1.0,
+        clutch: if t < 0.5 { 1.0 } else { 0.85 },
+        brake: 1.0,
+        ..Default::default()
+    });
+    let p = &car.params.clutch;
+    let temp = car.state.drivetrain.clutch_temp;
+    println!("after 15 s riding the clutch: {temp:.0} degC");
+    assert!(temp > p.fade_start_temp, "only {temp:.0} degC");
+    assert!(sim::car::engine::clutch_fade(p, temp) < 1.0);
+}
+
+#[test]
+fn a_clutch_kick_barely_warms_it_and_it_cools_off() {
+    let mut car = car_rolling(40.0 * KMH);
+    let start = car.state.drivetrain.clutch_temp;
+    let mut peak: f64 = 0.0;
+    drive(&mut car, 1.5, |s, t| {
+        peak = peak.max(s.drivetrain.clutch_temp);
+        Controls { throttle: 1.0, clutch: if t < 0.3 { 1.0 } else { 0.0 }, ..Default::default() }
+    });
+    println!("clutch kick: {start:.0} -> {peak:.0} degC");
+    assert!(peak - start < 40.0, "a single kick heated it {:.0} degC", peak - start);
+
+    // Heat it up, then let it cool with the clutch in.
+    car.state.drivetrain.clutch_temp = 400.0;
+    drive(&mut car, 120.0, |_, _| Controls { clutch: 1.0, ..Default::default() });
+    assert!(car.state.drivetrain.clutch_temp < 120.0, "still {:.0} degC", car.state.drivetrain.clutch_temp);
 }
 
 /// Peak rear slip ratio over a short window at 40 km/h with full throttle,

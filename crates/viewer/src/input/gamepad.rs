@@ -2,7 +2,8 @@
 //! Xbox / PlayStation style pads work, including generic clones.
 //!
 //! Layout: left stick steers, RT throttle, LT brake, A / Cross or RB
-//! handbrake, X / Square or LB clutch, Start resets the car.
+//! handbrake, X / Square or LB clutch, Start resets the car, Select / Back
+//! restarts a stalled engine.
 
 use gilrs::{Axis, Button, GamepadId, Gilrs};
 use sim::Controls;
@@ -14,6 +15,7 @@ pub struct Gamepad {
     gilrs: Option<Gilrs>,
     active: Option<GamepadId>,
     reset_pressed: bool,
+    restart_pressed: bool,
 }
 
 impl Gamepad {
@@ -26,24 +28,32 @@ impl Gamepad {
             }
         };
         let active = gilrs.as_ref().and_then(|g| g.gamepads().next().map(|(id, _)| id));
-        Self { gilrs, active, reset_pressed: false }
+        Self { gilrs, active, reset_pressed: false, restart_pressed: false }
     }
 
     /// Process pending events. Must run once per frame.
     pub fn poll(&mut self) {
         self.reset_pressed = false;
+        self.restart_pressed = false;
         let Some(gilrs) = &mut self.gilrs else { return };
         while let Some(event) = gilrs.next_event() {
             // Whichever pad was touched last becomes the active one.
             self.active = Some(event.id);
-            if let gilrs::EventType::ButtonPressed(Button::Start, _) = event.event {
-                self.reset_pressed = true;
+            match event.event {
+                gilrs::EventType::ButtonPressed(Button::Start, _) => self.reset_pressed = true,
+                gilrs::EventType::ButtonPressed(Button::Select, _) => self.restart_pressed = true,
+                _ => {}
             }
         }
     }
 
     pub fn reset_pressed(&self) -> bool {
         self.reset_pressed
+    }
+
+    /// Select / Back: restart a stalled engine.
+    pub fn restart_pressed(&self) -> bool {
+        self.restart_pressed
     }
 
     pub fn controls(&self) -> Option<Controls> {

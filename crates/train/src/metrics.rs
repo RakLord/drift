@@ -28,8 +28,12 @@ pub struct Report {
     pub drift_share: f64,
     pub drift_angle: f64,
     pub zones: f64,
+    /// Share of driving time with the clutch part-way in, and the mean
+    /// hottest clutch per run.
+    pub clutch_ride: f64,
+    pub clutch_peak: f64,
     /// Share of runs ending each way, in `EndReason::ALL` order.
-    pub ends: [f64; 5],
+    pub ends: [f64; 6],
     pub diversity: f64,
     pub sigma: f64,
     pub seconds: f64,
@@ -68,7 +72,7 @@ impl Report {
         let ticks: u64 = all.iter().map(|r| r.stats.ticks).sum();
         let drifting: Vec<&&EpisodeResult> = all.iter().filter(|r| r.stats.drift_time > 0.0).collect();
 
-        let mut ends = [0.0; 5];
+        let mut ends = [0.0; 6];
         for r in &all {
             let k = EndReason::ALL.iter().position(|&e| e == r.end).unwrap_or(0);
             ends[k] += 1.0 / all.len().max(1) as f64;
@@ -89,6 +93,8 @@ impl Report {
             drift_share: mean(all.iter().map(|r| r.stats.drift_time / r.time.max(1e-9))),
             drift_angle: mean(drifting.iter().map(|r| r.stats.average_angle())),
             zones: mean(all.iter().map(|r| f64::from(r.stats.zones_entered + r.stats.clips))),
+            clutch_ride: mean(all.iter().map(|r| r.stats.clutch_ride_time / r.time.max(1e-9))),
+            clutch_peak: mean(all.iter().map(|r| r.stats.peak_clutch_temp)),
             ends,
             diversity: mean(islands.iter().map(|i| diversity(&i.genomes))),
             sigma: mean(islands.iter().flat_map(|i| i.genomes.iter().map(|g| g.sigma))),
@@ -111,7 +117,7 @@ impl Report {
             _ => String::new(),
         };
         format!(
-            "gen {:>4} [{}] best {:>8.1} mean {:>8.1} | best car {:>5.0} m {:.2} laps, score {:.0} | {} | div {:.3} σ {:.3} | {:.1}s {:.1}M steps/s{test}",
+            "gen {:>4} [{}] best {:>8.1} mean {:>8.1} | best car {:>5.0} m {:.2} laps, score {:.0} | {} | clutch ride {:.0}% peak {:.0}°C | div {:.3} σ {:.3} | {:.1}s {:.1}M steps/s{test}",
             self.generation,
             self.stage,
             self.best,
@@ -120,6 +126,8 @@ impl Report {
             self.best_laps,
             self.best_score.total(),
             ends.join(" "),
+            self.clutch_ride * 100.0,
+            self.clutch_peak,
             self.diversity,
             self.sigma,
             self.seconds,
@@ -159,6 +167,8 @@ impl MetricsCsv {
                     "drift_share",
                     "drift_angle",
                     "zones",
+                    "clutch_ride",
+                    "clutch_peak",
                 ]
                 .iter()
                 .map(|s| s.to_string()),
@@ -185,7 +195,18 @@ impl MetricsCsv {
         for v in [b.line, b.angle, b.style, b.penalty, r.best_progress, r.best_laps] {
             num(v);
         }
-        for v in [m.line, m.angle, m.style, m.penalty, r.mean_progress, r.drift_share, r.drift_angle, r.zones] {
+        for v in [
+            m.line,
+            m.angle,
+            m.style,
+            m.penalty,
+            r.mean_progress,
+            r.drift_share,
+            r.drift_angle,
+            r.zones,
+            r.clutch_ride,
+            r.clutch_peak,
+        ] {
             num(v);
         }
         for v in r.ends {

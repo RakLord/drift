@@ -54,12 +54,17 @@ fn full_throttle_torque(p: &EngineParams, rpm: f64) -> f64 {
     curve[curve.len() - 1][1]
 }
 
-/// Most torque the clutch can pass right now. The pedal reduces it, and so
-/// does low engine speed (anti-stall), which lets the car pull away and lock
-/// the rear wheels without the engine stalling.
-pub fn clutch_capacity(p: &ClutchParams, pedal: f64, engine_omega: f64) -> f64 {
-    let anti_stall = smoothstep(p.stall_rpm, p.bite_rpm, rpm(engine_omega));
-    p.max_torque * (1.0 - pedal) * anti_stall
+/// Share of its grip a clutch keeps at temperature `temp`: all of it while
+/// cool, fading to `fade_grip` once fully cooked.
+pub fn clutch_fade(p: &ClutchParams, temp: f64) -> f64 {
+    let t = inverse_lerp(p.fade_start_temp, p.fade_full_temp, temp).clamp(0.0, 1.0);
+    1.0 - (1.0 - p.fade_grip) * t
+}
+
+/// Most torque the clutch can pass right now: less with the pedal pressed,
+/// and less when it's hot.
+pub fn clutch_capacity(p: &ClutchParams, pedal: f64, temp: f64) -> f64 {
+    p.max_torque * (1.0 - pedal) * clutch_fade(p, temp)
 }
 
 #[cfg(test)]
@@ -98,11 +103,13 @@ mod tests {
     }
 
     #[test]
-    fn clutch_slips_at_low_revs_and_with_pedal_in() {
+    fn clutch_capacity_follows_pedal_and_fades_when_hot() {
         let p = CarParams::default().clutch;
-        let high = omega_from_rpm(p.bite_rpm + 1000.0);
-        assert_eq!(clutch_capacity(&p, 0.0, high), p.max_torque);
-        assert_eq!(clutch_capacity(&p, 1.0, high), 0.0);
-        assert_eq!(clutch_capacity(&p, 0.0, omega_from_rpm(p.stall_rpm - 100.0)), 0.0);
+        let cool = p.ambient_temp;
+        assert_eq!(clutch_capacity(&p, 0.0, cool), p.max_torque);
+        assert_eq!(clutch_capacity(&p, 1.0, cool), 0.0);
+        assert!((clutch_capacity(&p, 0.0, p.fade_full_temp + 50.0) - p.max_torque * p.fade_grip).abs() < 1e-9);
+        let half = (p.fade_start_temp + p.fade_full_temp) / 2.0;
+        assert!(clutch_capacity(&p, 0.0, half) < p.max_torque);
     }
 }

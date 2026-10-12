@@ -48,6 +48,8 @@ rolling_resistance = 0.015
 [engine]
 inertia = 0.2                 # crank + flywheel, kg m^2
 idle_rpm = 900.0
+stall_rpm = 500.0             # held below this for stall_secs, the engine dies...
+stall_secs = 0.4              # ...a brief dip (e.g. a quick handbrake yank) recovers
 idle_governor_band_rpm = 300.0
 rev_limit_rpm = 7800.0
 limiter_hysteresis_rpm = 150.0
@@ -67,10 +69,15 @@ torque_curve = [
 
 [clutch]
 max_torque = 700.0
-# Anti-stall: clutch capacity fades out as the engine drops from bite_rpm to
-# stall_rpm, so the car can pull away and lock the rears without stalling.
-stall_rpm = 1100.0
-bite_rpm = 2200.0
+# Slipping turns power into heat (slip torque x slip speed). A quick clutch
+# kick barely warms it; riding it cooks it, and a hot clutch fades (holds
+# less torque, slips more) until it cools down again.
+heat_capacity = 2500.0        # J per degC (disc, pressure plate, flywheel face)
+cooling = 50.0                # W per degC above ambient (~50 s to cool off)
+ambient_temp = 60.0           # degC
+fade_start_temp = 250.0       # degC: starts losing grip above this...
+fade_full_temp = 450.0        # ...and is down to fade_grip by this
+fade_grip = 0.3               # share of capacity left when fully cooked
 
 [drivetrain]
 ratio = 8.0                   # single fixed gear x final drive (~2nd gear feel)

@@ -49,6 +49,7 @@ impl CarState {
     pub fn at_rest(params: &CarParams, position: Vec2, heading: f64) -> Self {
         let mut state = Self { position, heading, ..Default::default() };
         state.drivetrain.engine_omega = engine::omega_from_rpm(params.engine.idle_rpm);
+        state.drivetrain.clutch_temp = params.clutch.ambient_temp;
         for (wheel, load) in state.wheels.iter_mut().zip(params.body.static_loads()) {
             wheel.load = load;
         }
@@ -65,7 +66,7 @@ impl CarState {
             wheel.omega = omega;
         }
         let engine = omega * params.drivetrain.ratio;
-        if engine >= engine::omega_from_rpm(params.clutch.bite_rpm) {
+        if engine >= engine::omega_from_rpm(params.engine.idle_rpm) {
             state.drivetrain.engine_omega = engine;
             state.drivetrain.clutch_locked = true;
         }
@@ -93,6 +94,10 @@ impl CarState {
     /// World positions of the contact patches, indexed FL, FR, RL, RR.
     pub fn wheel_positions(&self, params: &CarParams) -> [Vec2; 4] {
         params.body.wheel_offsets().map(|offset| self.position + offset.rotate(self.heading))
+    }
+
+    pub fn engine_running(&self) -> bool {
+        self.drivetrain.engine_running
     }
 
     pub fn engine_rpm(&self) -> f64 {

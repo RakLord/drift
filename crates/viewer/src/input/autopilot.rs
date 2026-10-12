@@ -21,6 +21,11 @@ impl Autopilot {
     }
 
     /// A fresh autopilot in the same mode.
+    /// Doughnut mode starts from a standstill; the lap mode starts rolling.
+    pub fn starts_at_rest(&self) -> bool {
+        self.donut.is_some()
+    }
+
     pub fn restarted(&self) -> Self {
         Self::new(self.donut.is_some())
     }
@@ -106,6 +111,12 @@ impl Donut {
             }
             DonutPhase::Hold => (DONUT_COUNTERSTEER, hold_throttle(&mut self.integral)),
         };
-        Controls { steer, throttle, ..Default::default() }
+        // Pull away from rest without stalling: clutch in at first, eased out
+        // as the car gets going (there's no anti-stall any more).
+        let clutch = match self.phase {
+            DonutPhase::RollUp => 1.0 - common::math::smoothstep(0.5, 4.0, s.speed()),
+            _ => 0.0,
+        };
+        Controls { steer, throttle, clutch, ..Default::default() }
     }
 }

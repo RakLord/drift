@@ -20,7 +20,32 @@ pub fn draw(state: &CarState, params: &CarParams) {
     text("angle", x + 152.0, h - 82.0, 20.0, theme::TEXT_DIM);
 
     draw_tach(state, params, x, h - 66.0, 300.0);
+    draw_clutch_temp(state, params, x, h - 50.0, 300.0);
     draw_inputs(&state.controls, screen_width() - 240.0, h - 160.0);
+
+    if !state.engine_running() {
+        let message = "ENGINE STALLED - clutch in, then Y / Select to restart";
+        let width = measure_text(message, None, 30, 1.0).width;
+        text(message, (screen_width() - width) / 2.0, h * 0.4, 30.0, theme::SATURATED);
+    }
+}
+
+/// Clutch temperature: grey when cool, orange as it nears fade, red once
+/// it's fading.
+fn draw_clutch_temp(state: &CarState, params: &CarParams, x: f32, y: f32, width: f32) {
+    let c = &params.clutch;
+    let temp = state.drivetrain.clutch_temp;
+    let fraction = ((temp - c.ambient_temp) / (c.fade_full_temp - c.ambient_temp)).clamp(0.0, 1.0) as f32;
+    let color = if temp >= c.fade_start_temp {
+        theme::SATURATED
+    } else if temp >= c.fade_start_temp * 0.75 {
+        theme::SODIUM
+    } else {
+        theme::TEXT_DIM
+    };
+    draw_rectangle(x, y, width, 6.0, theme::PANEL);
+    draw_rectangle(x, y, width * fraction, 6.0, color);
+    text(&format!("clutch {temp:.0}°C"), x + width + 10.0, y + 7.0, 18.0, color);
 }
 
 /// Track name and position along the lap, top centre.

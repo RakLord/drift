@@ -23,7 +23,7 @@ pub struct Group {
 const WHEEL_NAMES: [&str; 4] = ["FL", "FR", "RL", "RR"];
 const WHEEL_VALUES: [&str; 4] = ["slip angle", "slip ratio", "grip use", "load"];
 const BODY: [&str; 8] = ["fwd vel", "side vel", "speed", "drift sin", "drift cos", "yaw rate", "fwd g", "side g"];
-const CAR: [&str; 6] = ["steer", "throttle", "brake", "handbrake", "clutch", "rpm"];
+const CAR: [&str; 7] = ["steer", "throttle", "brake", "handbrake", "clutch", "rpm", "clutch temp"];
 const TRACK: [&str; 6] = ["heading sin", "heading cos", "offset", "curvature", "left wall", "right wall"];
 const PREP: [&str; FEATURES_PER_CORNER] =
     ["distance", "progress", "angle", "sharpness", "clip at", "zone", "wall in", "wall out"];
@@ -35,7 +35,7 @@ pub const LAYOUT: [Group; 7] = [
     Group { name: "rays", len: RAY_COUNT, labels: |i| format!("ray {i}") },
     Group { name: "body", len: 8, labels: |i| BODY[i].to_owned() },
     Group { name: "wheels", len: 16, labels: |i| format!("{} {}", WHEEL_NAMES[i / 4], WHEEL_VALUES[i % 4]) },
-    Group { name: "car", len: 6, labels: |i| CAR[i].to_owned() },
+    Group { name: "car", len: 7, labels: |i| CAR[i].to_owned() },
     Group { name: "track", len: 6, labels: |i| TRACK[i].to_owned() },
     Group {
         name: "driver prep",
@@ -67,6 +67,18 @@ pub fn layout_hash() -> u64 {
         }
     }
     h
+}
+
+/// Index of the first input in the named group.
+pub fn offset(group: &str) -> usize {
+    let mut start = 0;
+    for g in LAYOUT {
+        if g.name == group {
+            return start;
+        }
+        start += g.len;
+    }
+    panic!("no input group named {group}");
 }
 
 /// Label of input `index` (e.g. "FL slip ratio").
@@ -148,6 +160,9 @@ impl Observer {
             c.handbrake,
             c.clutch,
             s.engine_rpm() / car.params.engine.rev_limit_rpm,
+            // 0 = cool, 1 = fully faded.
+            (s.drivetrain.clutch_temp - car.params.clutch.ambient_temp)
+                / (car.params.clutch.fade_full_temp - car.params.clutch.ambient_temp),
         ]);
 
         let place = &world.place;

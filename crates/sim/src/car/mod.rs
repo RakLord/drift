@@ -35,6 +35,16 @@ impl Car {
         Self { params, state }
     }
 
+    /// Turn the key: a stalled engine fires up at idle. With the clutch out
+    /// and the car stopped it will stall again straight away, as in life.
+    pub fn restart_engine(&mut self) {
+        let d = &mut self.state.drivetrain;
+        if !d.engine_running {
+            d.engine_running = true;
+            d.engine_omega = d.engine_omega.max(engine::omega_from_rpm(self.params.engine.idle_rpm));
+        }
+    }
+
     /// Advance by one sim tick of `dt` seconds on asphalt.
     pub fn step(&mut self, controls: Controls, dt: f64) {
         self.step_on(controls, &[Ground::ASPHALT; 4], dt);

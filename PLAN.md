@@ -27,7 +27,9 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
   - `nn` (own network library), `agent` (network driver, `.genome` files), `evo` (islands, neuron-level crossover, self-adaptive mutation, curriculum)
   - `train`: headless trainer with `config/training.toml`, `runs/<name>/` (metrics.csv, best.genome, checkpoints, config snapshot)
   - viewer `--genome` watch mode (`Tab` take over, `I` inputs panel)
-- Next: review the first full run, then M3 (drift stages).
+  - live follow: `viewer --follow <run>`
+  - clutch heat/fade and stalling (stops the AI riding the clutch), with clutch metrics in the trainer
+- Next: M3, getting the cars to drift (user-led training and shaping).
 
 **Conventions**
 - The sim uses `f64` (SI units). The NN will use `f32`.
@@ -86,7 +88,8 @@ Good driving and drift physics is what gives this project value. The GA will als
 - **Weight transfer:** a spring-damper per corner for roll and pitch, so the load shift has a realistic delay. That's what makes weight-transfer initiations (feints) work.
 - **Drivetrain:**
   - engine torque curve, rev limiter, engine braking and flywheel inertia
-  - analog clutch that slips under speed difference
+  - analog clutch that slips under speed difference and **heats up** when it slips; a hot clutch fades (riding it cooks it, a kick barely warms it)
+  - no anti-stall: the engine **stalls** if held under 500 rpm for ~0.4 s (a quick handbrake yank in gear recovers, holding it stalls); `Y` / pad Select restarts
   - single fixed ratio (no gearbox in v1)
   - locked or welded diff, as on real drift cars
 - **Steering and brakes:** high-lock steering (~60°) with a rate limit; front-biased foot brake (full pedal just under lock-up in a straight line); hydraulic handbrake on the rears. No driver aids: no ABS, no steering assist, no auto-clutch.
@@ -168,9 +171,9 @@ All numbers live in `config/scoring.toml` (hot-reloaded).
 
 ## Network
 
-**Shape:** varies per island (e.g. `110 → 32 → 32 → 5`, tanh hidden layers).
+**Shape:** varies per island (e.g. `111 → 32 → 32 → 5`, tanh hidden layers).
 
-### Inputs (110)
+### Inputs (111)
 
 All inputs are in the car's own frame (x forward, y left) and scaled to roughly -1..1 with fixed constants, using tanh for unbounded values. World position/heading, lap progress, and elapsed time are deliberately left out, so the network can't memorise a track.
 
@@ -179,7 +182,7 @@ All inputs are in the car's own frame (x forward, y left) and scaled to roughly 
 | Rays | 48 | 360°: 32 across the front 180°, 16 across the rear. Range 60 m. Value = `1 - dist/range`. Hit the track edge (hard or soft) |
 | Body dynamics | 8 | forward vel, sideways vel, speed, drift angle as sin + cos, yaw rate, forward + sideways g-force |
 | Wheels (×4) | 16 | per wheel: slip angle, slip ratio, grip usage (≥1 = sliding), load ÷ static load |
-| Car state | 6 | applied steer, throttle, brake, handbrake, clutch; engine RPM |
+| Car state | 7 | applied steer, throttle, brake, handbrake, clutch; engine RPM; clutch temperature |
 | Track position | 6 | heading vs track direction as sin + cos, offset from centreline (-1..1), signed curvature here, left/right edge hard (0/1) |
 | Driver prep (×3 corners) | 24 | per corner: distance to entry, progress through it, signed total angle, sharpness, clip point position (-1 = none), outer zone coverage, inside edge hard, outside edge hard |
 | Drift state | 2 | drifting (0/1), in a zone (0/1) |

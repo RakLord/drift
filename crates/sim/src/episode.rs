@@ -43,10 +43,11 @@ pub enum EndReason {
     Backwards,
     Crashed,
     Spun,
+    Stalled,
 }
 
 impl EndReason {
-    pub const ALL: [Self; 5] = [Self::TimeUp, Self::NoProgress, Self::Backwards, Self::Crashed, Self::Spun];
+    pub const ALL: [Self; 6] = [Self::TimeUp, Self::NoProgress, Self::Backwards, Self::Crashed, Self::Spun, Self::Stalled];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -55,6 +56,7 @@ impl EndReason {
             Self::Backwards => "backwards",
             Self::Crashed => "crashed",
             Self::Spun => "spun",
+            Self::Stalled => "stalled",
         }
     }
 }
@@ -72,6 +74,10 @@ pub struct EpisodeStats {
     pub hard_hits: u32,
     pub spins: u32,
     pub ticks: u64,
+    /// Seconds with the clutch pedal part-way (riding it).
+    pub clutch_ride_time: f64,
+    /// Hottest the clutch got, degC.
+    pub peak_clutch_temp: f64,
 }
 
 impl EpisodeStats {
@@ -108,12 +114,14 @@ pub struct Termination {
 }
 
 impl Termination {
-    /// Feed in one tick: the car's progress, that tick's score events, and
-    /// the time since the start. Returns why the run is over, if it is.
+    /// Feed in one tick: the car's progress and engine state, that tick's
+    /// score events, and the time since the start. Returns why the run is
+    /// over, if it is.
     pub fn update(
         &mut self,
         config: &EpisodeConfig,
         progress: f64,
+        engine_running: bool,
         events: &[ScoreEvent],
         time: f64,
         dt: f64,
@@ -129,6 +137,8 @@ impl Termination {
 
         if spun && config.end_on_spin {
             Some(EndReason::Spun)
+        } else if !engine_running {
+            Some(EndReason::Stalled)
         } else if self.hard_hits >= config.max_hard_hits {
             Some(EndReason::Crashed)
         } else if progress < self.best_progress - config.max_backwards {
@@ -222,13 +232,19 @@ impl Episode {
                 _ => {}
             }
         }
+        let pedal = self.world.car.state.controls.clutch;
+        if (0.05..0.95).contains(&pedal) {
+            stats.clutch_ride_time += TICK;
+        }
+        stats.peak_clutch_temp = stats.peak_clutch_temp.max(self.world.car.state.drivetrain.clutch_temp);
         if self.scorer.drift.active {
             stats.drift_time += TICK;
             stats.angle_seconds += self.world.car.state.body_slip_angle().abs().to_degrees() * TICK;
         }
 
         let time = self.tick as f64 * TICK;
-        self.end = self.termination.update(&self.config, self.world.progress, events, time, TICK);
+        let running = self.world.car.state.engine_running();
+        self.end = self.termination.update(&self.config, self.world.progress, running, events, time, TICK);
         if self.end == Some(EndReason::TimeUp) {
             // A drift still going at the bell counts.
             self.scorer.finish();

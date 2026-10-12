@@ -38,8 +38,7 @@ struct Follower {
 
 impl Controller for Follower {
     fn decide(&mut self, obs: &Observation) -> Controls {
-        // Track group starts after rays (48), body (8), wheels (16), car (6).
-        let t = 48 + 8 + 16 + 6;
+        let t = sim::sensors::observation::offset("track");
         let (heading_sin, offset, curvature) = (obs.values[t], obs.values[t + 2], obs.values[t + 3]);
         let steer = (0.1 * curvature - 2.0 * heading_sin - 1.5 * offset).clamp(-1.0, 1.0);
         Controls { steer: f64::from(steer), throttle: f64::from(self.throttle), ..Default::default() }
@@ -63,8 +62,8 @@ impl Controller for Random {
 }
 
 #[test]
-fn layout_has_110_uniquely_labelled_inputs() {
-    assert_eq!(INPUTS, 110);
+fn layout_has_111_uniquely_labelled_inputs() {
+    assert_eq!(INPUTS, 111);
     let labels: HashSet<String> = (0..INPUTS).map(label).collect();
     assert_eq!(labels.len(), INPUTS);
 }
@@ -92,7 +91,7 @@ fn inputs_are_scaled_sensibly() {
     // on/off flags and pedals, cosines of small angles, "no clip" (-1), and
     // corner distance (capped at "far away"; this oval's straights are long).
     let normal_at_limit = |name: &str| {
-        ["wall", "clip at", "progress", "distance"].iter().any(|k| name.contains(k))
+        ["wall", "clip at", "progress", "distance", "clutch temp"].iter().any(|k| name.contains(k))
             || ["drifting", "in zone", "throttle", "brake", "handbrake", "clutch", "drift cos", "heading cos"].contains(&name)
     };
     let continuous = (48..INPUTS).filter(|&i| !normal_at_limit(&label(i)));

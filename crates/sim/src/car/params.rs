@@ -82,6 +82,8 @@ pub struct TyreParams {
 pub struct EngineParams {
     pub inertia: f64,
     pub idle_rpm: f64,
+    pub stall_rpm: f64,
+    pub stall_secs: f64,
     pub idle_governor_band_rpm: f64,
     pub rev_limit_rpm: f64,
     pub limiter_hysteresis_rpm: f64,
@@ -95,8 +97,12 @@ pub struct EngineParams {
 #[serde(deny_unknown_fields)]
 pub struct ClutchParams {
     pub max_torque: f64,
-    pub stall_rpm: f64,
-    pub bite_rpm: f64,
+    pub heat_capacity: f64,
+    pub cooling: f64,
+    pub ambient_temp: f64,
+    pub fade_start_temp: f64,
+    pub fade_full_temp: f64,
+    pub fade_grip: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

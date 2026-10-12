@@ -19,6 +19,8 @@ use sim::sensors::observation::{Observation, Observer};
 use sim::{Controller, Controls, World};
 
 const POLL_SECS: f64 = 0.5;
+/// Rolling start speed when a run's settings aren't known.
+pub const DEFAULT_START_SPEED_KMH: f64 = 50.0;
 
 /// Settings of the run a genome came from (`<run>/config/*.toml`).
 pub struct RunSettings {
@@ -38,7 +40,7 @@ impl RunSettings {
         let episode = common::config::load::<TrainingFile>(dir.join("training.toml")).map_or_else(
             |_| EpisodeConfig {
                 max_secs: 60.0,
-                start_speed_kmh: 50.0,
+                start_speed_kmh: DEFAULT_START_SPEED_KMH,
                 decision_every: 4,
                 sensor_noise: 0.0,
                 no_progress_secs: 4.0,
@@ -180,10 +182,10 @@ impl AiDriver {
     }
 
     /// Apply the training end-of-run rules to this tick.
-    pub fn check_end(&mut self, progress: f64, events: &[ScoreEvent]) -> Option<EndReason> {
+    pub fn check_end(&mut self, progress: f64, engine_running: bool, events: &[ScoreEvent]) -> Option<EndReason> {
         self.current.as_ref()?;
         let time = self.tick as f64 * TICK;
-        self.termination.update(&self.run.episode, progress, events, time, TICK)
+        self.termination.update(&self.run.episode, progress, engine_running, events, time, TICK)
     }
 
     pub fn decision(&self) -> Controls {

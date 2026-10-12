@@ -34,4 +34,9 @@ impl Input {
     pub fn reset_pressed(&self) -> bool {
         self.gamepad.reset_pressed()
     }
+
+    /// Turn the key: Y on the keyboard, Select / Back on a pad.
+    pub fn restart_pressed(&self) -> bool {
+        self.gamepad.restart_pressed() || macroquad::prelude::is_key_pressed(macroquad::prelude::KeyCode::Y)
+    }
 }
