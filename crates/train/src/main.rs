@@ -137,7 +137,6 @@ fn run(args: Args) -> Result<(), String> {
     }
 
     let env = Env { car, scoring, episode: cfg.episode.clone() };
-    let test_env = Env { episode: sim::episode::EpisodeConfig { sensor_noise: 0.0, ..cfg.episode.clone() }, ..env.clone() };
     let test_tracks = library_tracks();
 
     // Start fresh or carry on from the latest checkpoint.
@@ -165,6 +164,8 @@ fn run(args: Args) -> Result<(), String> {
     };
     let mut curriculum = Curriculum::new(cfg.curriculum.clone(), args.stage.unwrap_or(pop.stage));
     let mut csv = MetricsCsv::open(&run_dir.join("metrics.csv"), pop.islands.len()).map_err(|e| e.to_string())?;
+    const HEADER_EVERY: u32 = 20;
+    let mut first_generation = true;
 
     let shapes: Vec<String> = pop.islands.iter().map(|i| i.spec.describe()).collect();
     println!(
@@ -183,11 +184,15 @@ fn run(args: Args) -> Result<(), String> {
         let started = Instant::now();
         let tracks = runner::generation_tracks(&generator, cfg.seed, generation, cfg.tracks.per_generation);
         let seeds = runner::episode_seeds(cfg.seed, generation, tracks.len());
-        let results = evaluate(&pop.islands, &tracks, &seeds, &env);
-
+        // Shaping stages run on softer rules; the final stage on the real ones.
         let stage = curriculum.stage().clone();
+        let (scoring, episode) = stage.rules(&env.scoring, &env.episode);
+        let stage_env = Env { car: env.car.clone(), scoring, episode };
+        let results = evaluate(&pop.islands, &tracks, &seeds, &stage_env);
+
         for (island, island_results) in pop.islands.iter_mut().zip(&results) {
             island.fitness = island_results.iter().map(|runs| stage.fitness(runs)).collect();
+            island.objectives = island_results.iter().map(|runs| stage.objectives(runs)).collect();
         }
         let best = pop
             .islands
@@ -204,6 +209,10 @@ fn run(args: Args) -> Result<(), String> {
         let due_test = cfg.tracks.test_every > 0 && generation % cfg.tracks.test_every == 0 && !test_tracks.is_empty();
         if due_test {
             let seeds = runner::episode_seeds(cfg.seed, u32::MAX, test_tracks.len());
+            let test_env = Env {
+                episode: sim::episode::EpisodeConfig { sensor_noise: 0.0, ..stage_env.episode.clone() },
+                ..stage_env.clone()
+            };
             let runs = run_genome(&best_island.spec, &best_genome.params, &test_tracks, &seeds, &test_env);
             report.test_fitness = Some(stage.fitness(&runs));
             report.test_laps = Some(runs.iter().map(|r| r.laps()).sum::<f64>() / runs.len() as f64);
@@ -217,7 +226,8 @@ fn run(args: Args) -> Result<(), String> {
         };
         genome_file::save(run_dir.join("best.genome"), &saved).map_err(|e| e.to_string())?;
 
-        if curriculum.observe(&results[bi][bg]) {
+        let advanced = curriculum.observe(&results[bi][bg]);
+        if advanced {
             println!("== curriculum: moving on to stage '{}'", curriculum.stage().name);
         }
         let migration_due = cfg.ga.migration_every > 0 && generation > 0 && generation % cfg.ga.migration_every == 0;
@@ -227,7 +237,16 @@ fn run(args: Args) -> Result<(), String> {
 
         for island in &mut pop.islands {
             let mut rng = Rng::with_stream(runner::mix(cfg.seed, u64::from(generation)), island.index as u64);
+            let best = island.best().map(|(g, _)| island.genomes[g].params.clone());
             island.breed(&cfg.ga, &mut rng, &mut pop.ids, generation + 1);
+            // New stage: fresh step sizes and a burst of variety around the
+            // island's best, so it can explore the new reward.
+            if advanced && let Some(best) = best {
+                island.restage(&best, &cfg.ga, &mut rng, &mut pop.ids, generation + 1);
+            }
+        }
+        if advanced {
+            println!("== sigma reset to {} and {:.0}% of each island reseeded", cfg.ga.sigma_start, cfg.ga.reseed_fraction * 100.0);
         }
         pop.generation += 1;
         pop.stage = curriculum.current;
@@ -235,6 +254,13 @@ fn run(args: Args) -> Result<(), String> {
         report.seconds = started.elapsed().as_secs_f64();
         let ticks: u64 = results.iter().flatten().flatten().map(|r| r.stats.ticks).sum();
         report.steps_per_sec = ticks as f64 / report.seconds.max(1e-9);
+        if first_generation || generation % HEADER_EVERY == 0 {
+            if first_generation {
+                println!("{}", Report::legend());
+            }
+            println!("{}", Report::header());
+        }
+        first_generation = false;
         println!("{}", report.console_line());
         csv.write(&report).map_err(|e| e.to_string())?;
 

@@ -129,7 +129,7 @@ pub fn load(path: &Path) -> io::Result<Population> {
             let parents = [gh.parents.first().copied(), gh.parents.get(1).copied()];
             genomes.push(Genome { id: gh.id, params, sigma: gh.sigma, parents, born: gh.born });
         }
-        islands.push(Island { index: ih.index, spec: ih.spec, genomes, fitness: vec![] });
+        islands.push(Island { index: ih.index, spec: ih.spec, genomes, fitness: vec![], objectives: vec![] });
     }
     Ok(Population { generation: header.generation, stage: header.stage, ids: Ids(header.next_id), islands })
 }

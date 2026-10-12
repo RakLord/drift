@@ -29,6 +29,8 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
   - viewer `--genome` watch mode (`Tab` take over, `I` inputs panel)
   - live follow: `viewer --follow <run>`
   - clutch heat/fade and stalling (stops the AI riding the clutch), with clutch metrics in the trainer
+  - network view (`V`, pulled forward from M4): live layers, edges, inspect, neuron health
+  - drift shaping from gen 0, Pareto selection, stage-change reseed, behaviour diversity and drift metrics (after `runs/1` learned to grip-drive)
 - Next: M3, getting the cars to drift (user-led training and shaping).
 
 **Conventions**
@@ -47,6 +49,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `cargo run --release -p train -- --name <run> [--generations N] [--stage N] [--resume]`: train
 - `cargo run -p viewer -- --genome runs/<run>/best.genome`: watch a trained driver
 - `cargo run -p viewer -- --follow <run>`: watch a run live (picks up each new best between runs)
+- `V` while an AI drives: network view (add `--net` to start with it open)
 
 **Tuning notes**
 - It feels a little icy on keyboard. Retest on gamepad before tuning.
@@ -212,9 +215,12 @@ Outputs are produced once per decision and held until the next one.
 - **Islands:** several sub-populations, each with its own network shape and activation functions. Breeding happens within an island only. Periodically the worst island is replaced with a copy of the best.
 - **Crossover:** neuron-level (a child takes each hidden neuron's whole incoming weight set from one parent).
 - **Mutation:** Gaussian noise on a random subset of weights, plus a rare large reset. σ shrinks over time or self-adapts per genome.
-- **Fitness (shaped curriculum):** progress → +Angle → +Line → +Style, then the pure game score dominates.
+- **Fitness (shaped from gen 0):** driving reward (progress, capped after stage 1, plus time alive) multiplied by (1 + drift_bonus × drift quality), where drift quality is raw angle-time. Banked judged score (Line/Angle/Style) counts in the final stage. Stages: drive → slide → judged. Shaping stages soften the scoring (drift from 5°, flat speed multiplier, spins don't end the run, no bobble penalty).
+- **Selection:** Pareto ranking over (driving, drift quality) inside each island, so slidey crashers survive alongside grip drivers.
+- **Stage change:** σ resets and 30% of each island is reseeded with heavily mutated copies of its best.
+- **Starting priors:** calm start (straight, some throttle, brake off, handbrake/clutch light).
 - **Early termination:** a crash, spin, or no progress for a few seconds ends the episode.
-- **Diversity:** small tournaments, a few random immigrants per generation, and a tracked diversity metric.
+- **Diversity:** small tournaments, a few random immigrants per generation; diversity is tracked in behaviour space (lap share, drift share, angle, handbrake, clutch) as well as weight space.
 - **Polish phase:** smaller σ, more tracks per evaluation, and elites re-evaluated each generation.
 - **Monitoring:** see *Network view & metrics*.
 
@@ -230,16 +236,19 @@ Outputs are produced once per decision and held until the next one.
 
 ## Network view & metrics
 
-**Network view (per genome):**
-- Nodes in layer columns. Inputs are grouped and labelled (rays, dynamics, wheels, driver prep); rays can also be drawn as a radial fan around a mini car.
-- Edges are coloured by sign and their thickness shows weight size. Only the strongest edges are shown by default (adjustable threshold) so it stays readable.
-- **Live mode:** during a replay, nodes light up with their current activation and the outputs show as bars (steer, throttle, brake, handbrake).
-- **Info panel:**
-  - island and network shape
-  - fitness, with the Line/Angle/Style breakdown
-  - generation born and parents
-  - ★/✓/✗ history
-- Open it from any car: the overlay view, a review grid tile, or a replay.
+**Network view (per genome):** `V` while an AI drives cycles off → split (track left ~45%, network right) → fullscreen.
+- **Layout:** input area, then one column per hidden layer, then the 5 outputs.
+  - The 48 rays are shown as a fan of nodes around a mini car, at their real angles. The fan only displays values: the rays feed the network through one bundled "rays" node at the top of the input column.
+  - The other inputs form a grouped, labelled column (body, wheels, car, track, prep, drift). Click a group header to collapse it to one node with bundled edges.
+- **Nodes** are filled by their activation (pink +, cyan −).
+- **Edges** show the live contribution `weight × source activation` by default, with raw weights as a toggle. Colour shows the sign; thickness shows size relative to the layer's largest. Only the strongest X% per layer are drawn (adjustable).
+- **Inspect:**
+  - hover a node to see its edges, label, value, pre-activation and bias
+  - click to pin it, which lists its top contributors (e.g. "steer ← side vel −0.42")
+- **Outputs** show a value bar and a ~5 s sparkline each.
+- **Neuron health:** a rolling 5 s window marks **dead** neurons (never change) and **saturated** ones (pinned at the activation's limits), with counts per layer.
+- While you've taken over (`Tab`) the view freezes.
+- *(Later)* An info panel with island, fitness breakdown, parents and ratings, opened from any car in the overlay, the review grid or a replay.
 
 **Generation metrics:**
 - **Fitness:** best / mean / median / worst, overall and per island
@@ -319,7 +328,7 @@ drift/
       screens/               play, watch (live overlay), replay, review (5×5 grid), dashboard
       render/                camera, car, track, hud, theme (JDM palette)
         effects/             particles, smoke, skidmarks, post
-      debug/                 telemetry, rays, network_view
+      debug/                 telemetry, rays, network_view/ (layout, edges, health, inspect, outputs)
 ```
 
 ## Milestones

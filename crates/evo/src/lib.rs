@@ -15,7 +15,7 @@ pub mod island;
 pub mod mutation;
 pub mod selection;
 
-pub use config::GaConfig;
+pub use config::{GaConfig, Selection};
 pub use fitness::{Curriculum, Stage};
 pub use genome::Genome;
 pub use island::{Ids, Island, migrate};

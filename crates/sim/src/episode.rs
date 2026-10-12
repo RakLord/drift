@@ -14,6 +14,8 @@ use crate::sensors::observation::{Observation, Observer};
 use crate::track::Track;
 
 pub const TICK: f64 = 1.0 / 120.0;
+/// Below this speed (m/s) drift angles are noise and aren't counted.
+const MOVING: f64 = 3.0;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,6 +82,14 @@ pub struct EpisodeStats {
     pub clutch_slip_time: f64,
     /// Hottest the clutch got, degC.
     pub peak_clutch_temp: f64,
+    /// Seconds with the handbrake pulled, and with the clutch pedal past
+    /// its free play.
+    pub handbrake_time: f64,
+    pub clutch_time: f64,
+    /// Largest drift angle reached, degrees.
+    pub max_angle: f64,
+    /// Seconds spent above 20 degrees of drift angle (moving).
+    pub above_20_time: f64,
 }
 
 impl EpisodeStats {
@@ -235,7 +245,21 @@ impl Episode {
             }
         }
         let car = &self.world.car;
-        if crate::car::engine::in_bite_zone(&car.params.clutch, car.state.controls.clutch) {
+        let controls = car.state.controls;
+        if controls.handbrake > 0.1 {
+            stats.handbrake_time += TICK;
+        }
+        if controls.clutch > car.params.clutch.free_play {
+            stats.clutch_time += TICK;
+        }
+        if car.state.speed() > MOVING {
+            let angle = car.state.body_slip_angle().abs().to_degrees();
+            stats.max_angle = stats.max_angle.max(angle);
+            if angle > 20.0 {
+                stats.above_20_time += TICK;
+            }
+        }
+        if crate::car::engine::in_bite_zone(&car.params.clutch, controls.clutch) {
             stats.clutch_pedal_time += TICK;
             if !car.state.drivetrain.clutch_locked && car.state.engine_running() {
                 stats.clutch_slip_time += TICK;

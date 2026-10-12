@@ -1,5 +1,16 @@
 use serde::{Deserialize, Serialize};
 
+/// How breeding picks parents and elites.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Selection {
+    /// By the scalar fitness alone.
+    Scalar,
+    /// By Pareto rank over (driving, drift quality), so specialists at
+    /// either end survive alongside all-rounders.
+    Pareto,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GaConfig {
@@ -25,4 +36,10 @@ pub struct GaConfig {
     pub migration_every: u32,
     /// ...if its best fitness is below this share of the best island's.
     pub migration_gap: f64,
+    pub selection: Selection,
+    /// On a curriculum stage change: every sigma resets to `sigma_start`,
+    /// and this share of each island is replaced by copies of its best with
+    /// every parameter nudged by `reseed_sigma`.
+    pub reseed_fraction: f64,
+    pub reseed_sigma: f64,
 }

@@ -1,25 +1,81 @@
-//! Fitness, shaped by a curriculum: early stages reward simply getting round
-//! the track; later stages bring in drift angle, then the line (zones and
-//! clips), then style. Each stage can say when to move on.
+//! Fitness, shaped by a curriculum.
+//!
+//! Drifting is rewarded from the very first generation, on raw angle-time
+//! rather than banked combo points, and multiplies the driving reward so a
+//! car that slides and survives beats one that grips: `fitness = (progress +
+//! time alive) x (1 + drift_bonus x drift_quality) + judged score terms`.
+//! Shaping stages also soften the scoring rules (drift counts from a few
+//! degrees, spins don't end the run); the final stage is judged for real.
 
 use serde::{Deserialize, Serialize};
-use sim::episode::EpisodeResult;
+use sim::episode::{EpisodeConfig, EpisodeResult};
+use sim::scoring::ScoringParams;
+
+/// Angle-seconds per second that counts as a perfect drift quality of 1.
+pub const QUALITY_ANGLE_DEG: f64 = 45.0;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Stage {
     pub name: String,
-    /// Fitness per metre of progress round the track.
+    /// Fitness per metre of progress round the track...
     pub progress: f64,
-    /// Weights on the judged score's categories.
+    /// ...credited for at most this many laps (none = unlimited).
+    #[serde(default)]
+    pub progress_cap_laps: Option<f64>,
+    /// Fitness per second survived.
+    #[serde(default)]
+    pub time_alive: f64,
+    /// Multiplies the progress + alive reward by (1 + drift_bonus x drift
+    /// quality).
+    #[serde(default)]
+    pub drift_bonus: f64,
+    /// Small fitness per second of handbrake or clutch use (0 = off).
+    #[serde(default)]
+    pub pedal_bonus: f64,
+    /// Weights on the judged (banked) score's categories.
     pub line: f64,
     pub angle: f64,
     pub style: f64,
     /// Weight on penalty points (spins, crashes, bobbles).
     pub penalty: f64,
+    /// Softer rules while learning to drift (none = the real rules).
+    #[serde(default)]
+    pub shaping: Option<Shaping>,
     /// When to move on to the next stage (none = final stage).
     #[serde(default)]
     pub advance: Option<Advance>,
+}
+
+/// Scoring and episode rules for shaping stages.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Shaping {
+    /// A drift counts (and earns angle points) from this many degrees.
+    pub drift_start_angle_deg: f64,
+    /// Speed multiplier on all drift points, flat at every speed.
+    pub speed_multiplier: f64,
+    pub end_on_spin: bool,
+    pub bobble_penalty: f64,
+}
+
+impl Shaping {
+    /// Apply to a copy of the real scoring and episode rules.
+    pub fn apply(&self, scoring: &mut ScoringParams, episode: &mut EpisodeConfig) {
+        let drift = &mut scoring.drift;
+        drift.start_angle_deg = self.drift_start_angle_deg;
+        drift.end_angle_deg = drift.end_angle_deg.min(self.drift_start_angle_deg * 0.6);
+        scoring.speed.slow_multiplier = self.speed_multiplier;
+        scoring.speed.fast_multiplier = self.speed_multiplier;
+        scoring.style.bobble_penalty = self.bobble_penalty;
+        episode.end_on_spin = self.end_on_spin;
+    }
+}
+
+/// How much and how hard a run drifted, from raw angle-time: 1.0 = a 45
+/// degree drift held for the whole run. Doesn't depend on banking combos.
+pub fn drift_quality(r: &EpisodeResult) -> f64 {
+    r.stats.angle_seconds / (r.time.max(1e-9) * QUALITY_ANGLE_DEG)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -42,6 +98,8 @@ pub enum Metric {
     Style,
     /// The judged score (line + angle + style - penalties).
     Score,
+    /// See `drift_quality`.
+    DriftQuality,
 }
 
 /// Mean of `f` over a genome's runs.
@@ -57,18 +115,43 @@ impl Metric {
             Self::Line => r.score.line,
             Self::Style => r.score.style,
             Self::Score => r.score.total(),
+            Self::DriftQuality => drift_quality(r),
         })
     }
 }
 
 impl Stage {
+    /// The driving reward: progress (capped) plus time alive.
+    fn base(&self, r: &EpisodeResult) -> f64 {
+        let credited = self.progress_cap_laps.map_or(r.progress, |laps| r.progress.min(laps * r.track_length));
+        self.progress * credited + self.time_alive * r.time
+    }
+
+    fn run_fitness(&self, r: &EpisodeResult) -> f64 {
+        let s = &r.score;
+        let shaped = self.base(r) * (1.0 + self.drift_bonus * drift_quality(r));
+        let pedals = self.pedal_bonus * (r.stats.handbrake_time + r.stats.clutch_time);
+        shaped + pedals + self.line * s.line + self.angle * s.angle + self.style * s.style - self.penalty * s.penalty
+    }
+
     /// A genome's fitness: the average over its runs (one per track).
     pub fn fitness(&self, results: &[EpisodeResult]) -> f64 {
-        mean(results, |r| {
-            let s = &r.score;
-            self.progress * r.progress + self.line * s.line + self.angle * s.angle + self.style * s.style
-                - self.penalty * s.penalty
-        })
+        mean(results, |r| self.run_fitness(r))
+    }
+
+    /// The two things selection trades off: driving (progress / staying
+    /// alive) and drifting (drift quality), each averaged over the runs.
+    pub fn objectives(&self, results: &[EpisodeResult]) -> [f64; 2] {
+        [mean(results, |r| self.base(r)), mean(results, drift_quality)]
+    }
+
+    /// Scoring and episode rules for this stage, from the real ones.
+    pub fn rules(&self, scoring: &ScoringParams, episode: &EpisodeConfig) -> (ScoringParams, EpisodeConfig) {
+        let (mut scoring, mut episode) = (scoring.clone(), episode.clone());
+        if let Some(shaping) = &self.shaping {
+            shaping.apply(&mut scoring, &mut episode);
+        }
+        (scoring, episode)
     }
 }
 
@@ -130,7 +213,67 @@ mod tests {
     }
 
     fn stage(progress: f64, angle: f64, advance: Option<Advance>) -> Stage {
-        Stage { name: "s".into(), progress, line: 0.0, angle, style: 0.0, penalty: 1.0, advance }
+        Stage {
+            name: "s".into(),
+            progress,
+            progress_cap_laps: None,
+            time_alive: 0.0,
+            drift_bonus: 0.0,
+            pedal_bonus: 0.0,
+            line: 0.0,
+            angle,
+            style: 0.0,
+            penalty: 1.0,
+            shaping: None,
+            advance,
+        }
+    }
+
+    #[test]
+    fn drifting_multiplies_the_driving_reward() {
+        let s = Stage { drift_bonus: 2.0, penalty: 0.0, ..stage(1.0, 0.0, None) };
+        let grip = result(500.0, 0.0, 0.0);
+        // Same distance, but 15 s at 30 degrees over a 30 s run.
+        let mut slide = result(500.0, 0.0, 0.0);
+        slide.stats.angle_seconds = 15.0 * 30.0;
+        let quality = drift_quality(&slide);
+        assert!((quality - 1.0 / 3.0).abs() < 1e-9);
+        assert_eq!(s.fitness(&[grip]), 500.0);
+        assert!((s.fitness(&[slide]) - 500.0 * (1.0 + 2.0 * quality)).abs() < 1e-9);
+        assert_eq!(s.objectives(&[slide])[0], 500.0);
+    }
+
+    #[test]
+    fn progress_cap_and_time_alive() {
+        let s = Stage { progress_cap_laps: Some(1.0), time_alive: 5.0, penalty: 0.0, ..stage(1.0, 0.0, None) };
+        // 1500 m on a 1000 m track in 30 s: credited 1000 m + 150 for time.
+        assert_eq!(s.fitness(&[result(1500.0, 0.0, 0.0)]), 1150.0);
+    }
+
+    #[test]
+    fn shaping_softens_the_rules() {
+        let shaping = Shaping { drift_start_angle_deg: 5.0, speed_multiplier: 1.0, end_on_spin: false, bobble_penalty: 0.0 };
+        let s = Stage { shaping: Some(shaping), ..stage(1.0, 0.0, None) };
+        let real = ScoringParams::default();
+        let episode = EpisodeConfig {
+            max_secs: 60.0,
+            start_speed_kmh: 50.0,
+            decision_every: 4,
+            sensor_noise: 0.0,
+            no_progress_secs: 4.0,
+            max_backwards: 20.0,
+            max_hard_hits: 3,
+            end_on_spin: true,
+        };
+        let (scoring, episode) = s.rules(&real, &episode);
+        assert_eq!(scoring.drift.start_angle_deg, 5.0);
+        assert!(scoring.drift.end_angle_deg < 5.0);
+        assert_eq!(scoring.speed.multiplier(20.0), 1.0);
+        assert_eq!(scoring.style.bobble_penalty, 0.0);
+        assert!(!episode.end_on_spin);
+        // A stage without shaping keeps the real rules.
+        let (unchanged, _) = stage(1.0, 0.0, None).rules(&real, &episode);
+        assert_eq!(unchanged.drift.start_angle_deg, real.drift.start_angle_deg);
     }
 
     #[test]

@@ -3,7 +3,8 @@ use nn::NetworkSpec;
 
 use crate::crossover::neuron_crossover;
 use crate::mutation::mutate;
-use crate::selection::{ranked, tournament};
+use crate::config::Selection;
+use crate::selection::{pareto_order, positions, ranked, tournament};
 use crate::{GaConfig, Genome};
 
 /// Hands out unique genome ids.
@@ -25,12 +26,15 @@ pub struct Island {
     pub genomes: Vec<Genome>,
     /// Fitness of each genome after evaluation (same order as `genomes`).
     pub fitness: Vec<f64>,
+    /// Pareto objectives of each genome after evaluation (driving, drift
+    /// quality); used when selection is Pareto.
+    pub objectives: Vec<[f64; 2]>,
 }
 
 impl Island {
     pub fn new(index: usize, spec: NetworkSpec, cfg: &GaConfig, rng: &mut Rng, ids: &mut Ids) -> Self {
         let genomes = (0..cfg.population).map(|_| random_genome(&spec, cfg, rng, ids, 0)).collect();
-        Self { index, spec, genomes, fitness: vec![] }
+        Self { index, spec, genomes, fitness: vec![], objectives: vec![] }
     }
 
     /// Index and fitness of the fittest genome (after evaluation).
@@ -42,16 +46,21 @@ impl Island {
     pub fn breed(&mut self, cfg: &GaConfig, rng: &mut Rng, ids: &mut Ids, generation: u32) {
         assert_eq!(self.fitness.len(), self.genomes.len(), "evaluate before breeding");
         let n = self.genomes.len();
-        let order = ranked(&self.fitness);
+        let order = if cfg.selection == Selection::Pareto && self.objectives.len() == n {
+            pareto_order(&self.objectives)
+        } else {
+            ranked(&self.fitness)
+        };
+        let position = positions(&order);
         let elites = ((n as f64 * cfg.elite_fraction).ceil() as usize).clamp(1, n);
         let immigrants = cfg.immigrants.min(n - elites);
         let neurons = self.spec.neuron_ranges();
 
         let mut next: Vec<Genome> = order[..elites].iter().map(|&i| self.genomes[i].clone()).collect();
         while next.len() < n - immigrants {
-            let a = &self.genomes[tournament(&self.fitness, cfg.tournament_size, rng)];
+            let a = &self.genomes[tournament(&position, cfg.tournament_size, rng)];
             let (mut params, mut sigma, parents) = if rng.chance(cfg.crossover_rate) {
-                let b = &self.genomes[tournament(&self.fitness, cfg.tournament_size, rng)];
+                let b = &self.genomes[tournament(&position, cfg.tournament_size, rng)];
                 let child = neuron_crossover(&a.params, &b.params, &neurons, rng);
                 (child, (a.sigma * b.sigma).sqrt(), [Some(a.id), Some(b.id)])
             } else {
@@ -65,6 +74,23 @@ impl Island {
         }
         self.genomes = next;
         self.fitness.clear();
+        self.objectives.clear();
+    }
+
+    /// After a curriculum stage change (call after breeding): every sigma
+    /// goes back to `sigma_start`, and the last `reseed_fraction` of the
+    /// island (children and immigrants, never the elites at the front) is
+    /// replaced by heavily mutated copies of `best`.
+    pub fn restage(&mut self, best: &[f32], cfg: &GaConfig, rng: &mut Rng, ids: &mut Ids, generation: u32) {
+        for g in &mut self.genomes {
+            g.sigma = cfg.sigma_start;
+        }
+        let n = self.genomes.len();
+        let count = ((n as f64 * cfg.reseed_fraction).round() as usize).min(n.saturating_sub(1));
+        for g in &mut self.genomes[n - count..] {
+            let params = best.iter().map(|&p| p + (rng.gaussian() * cfg.reseed_sigma) as f32).collect();
+            *g = Genome { id: ids.fresh(), params, sigma: cfg.sigma_start, parents: [None, None], born: generation };
+        }
     }
 }
 
@@ -117,6 +143,9 @@ mod tests {
             immigrants: 2,
             migration_every: 10,
             migration_gap: 0.8,
+            selection: Selection::Pareto,
+            reseed_fraction: 0.3,
+            reseed_sigma: 0.3,
         }
     }
 
@@ -160,6 +189,38 @@ mod tests {
         island.fitness = island.genomes.iter().map(score).collect();
         let last = island.best().unwrap().1;
         assert!(last > first * 0.2, "{first} -> {last}");
+    }
+
+    #[test]
+    fn pareto_breeding_keeps_both_specialists() {
+        let (mut rng, mut ids) = (Rng::new(5), Ids::default());
+        let mut island = Island::new(0, spec(3), &cfg(), &mut rng, &mut ids);
+        // Genome 0 drives far, genome 1 drifts hard, the rest are mediocre.
+        island.fitness = (0..20).map(|i| if i < 2 { 50.0 } else { 10.0 }).collect();
+        island.objectives = (0..20).map(|i| match i {
+            0 => [100.0, 0.0],
+            1 => [5.0, 0.9],
+            _ => [10.0, 0.1],
+        }).collect();
+        let (driver, drifter) = (island.genomes[0].clone(), island.genomes[1].clone());
+        island.breed(&GaConfig { elite_fraction: 0.1, ..cfg() }, &mut rng, &mut ids, 1);
+        assert!(island.genomes.contains(&driver) && island.genomes.contains(&drifter), "both ends of the front are elites");
+    }
+
+    #[test]
+    fn restage_resets_sigma_and_reseeds_the_tail() {
+        let (mut rng, mut ids) = (Rng::new(6), Ids::default());
+        let mut island = Island::new(0, spec(3), &cfg(), &mut rng, &mut ids);
+        for g in &mut island.genomes {
+            g.sigma = 0.01;
+        }
+        let best = island.genomes[0].params.clone();
+        let head = island.genomes[0].clone();
+        island.restage(&best, &cfg(), &mut rng, &mut ids, 9);
+        assert!(island.genomes.iter().all(|g| g.sigma == cfg().sigma_start));
+        let reseeded = island.genomes.iter().filter(|g| g.born == 9).count();
+        assert_eq!(reseeded, 6, "30% of 20");
+        assert_eq!(island.genomes[0].params, head.params, "the front of the island is kept");
     }
 
     #[test]

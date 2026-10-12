@@ -5,7 +5,8 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use evo::Island;
-use evo::diversity::diversity;
+use evo::diversity::{behaviour, behaviour_diversity, diversity};
+use evo::fitness::drift_quality;
 use sim::episode::{EndReason, EpisodeResult};
 use sim::scoring::Breakdown;
 
@@ -35,6 +36,30 @@ pub struct Report {
     pub clutch_peak: f64,
     /// Share of runs ending each way, in `EndReason::ALL` order.
     pub ends: [f64; 6],
+    /// Drift quality (raw angle-time, see `evo::fitness::drift_quality`):
+    /// the best genome's mean, and the population's.
+    pub best_quality: f64,
+    pub mean_quality: f64,
+    /// The top drifter: the genome with the highest drift quality (often
+    /// not the fittest). Its drift quality, average drift angle (deg),
+    /// judged score and laps.
+    pub top_quality: f64,
+    pub top_angle: f64,
+    pub top_score: f64,
+    pub top_laps: f64,
+    /// Spins per run, across the population.
+    pub spins: f64,
+    /// Share of time with the handbrake on / clutch past its free play.
+    pub handbrake_share: f64,
+    pub clutch_share: f64,
+    /// Largest drift angle per run: median and 90th percentile, degrees.
+    pub max_angle_p50: f64,
+    pub max_angle_p90: f64,
+    /// Share of time above 20 degrees.
+    pub above_20_share: f64,
+    /// Spread of the population in behaviour space (0 = all drive alike).
+    pub behaviour_diversity: f64,
+    /// Spread in weight space.
     pub diversity: f64,
     pub sigma: f64,
     pub seconds: f64,
@@ -73,6 +98,22 @@ impl Report {
         let ticks: u64 = all.iter().map(|r| r.stats.ticks).sum();
         let drifting: Vec<&&EpisodeResult> = all.iter().filter(|r| r.stats.drift_time > 0.0).collect();
 
+        let share = |f: fn(&EpisodeResult) -> f64| mean(all.iter().map(|r| f(r) / r.time.max(1e-9)));
+        let mut max_angles: Vec<f64> = all.iter().map(|r| r.stats.max_angle).collect();
+        max_angles.sort_by(f64::total_cmp);
+        let percentile = |p: f64| max_angles.get(((max_angles.len() as f64 - 1.0) * p).round() as usize).copied().unwrap_or(0.0);
+        let behaviours: Vec<[f64; 5]> = results.iter().flatten().map(|runs| behaviour(runs)).collect();
+        let quality_of = |runs: &[EpisodeResult]| mean(runs.iter().map(drift_quality));
+        let top_runs: &[EpisodeResult] = results
+            .iter()
+            .flatten()
+            .max_by(|a, b| quality_of(a).total_cmp(&quality_of(b)))
+            .map_or(&[], Vec::as_slice);
+        let drifting_angle = |runs: &[EpisodeResult]| {
+            let time: f64 = runs.iter().map(|r| r.stats.drift_time).sum();
+            let angle: f64 = runs.iter().map(|r| r.stats.angle_seconds).sum();
+            if time > 0.0 { angle / time } else { 0.0 }
+        };
         let mut ends = [0.0; 6];
         for r in &all {
             let k = EndReason::ALL.iter().position(|&e| e == r.end).unwrap_or(0);
@@ -98,6 +139,19 @@ impl Report {
             clutch_slip: mean(all.iter().map(|r| r.stats.clutch_slip_time / r.time.max(1e-9))),
             clutch_peak: mean(all.iter().map(|r| r.stats.peak_clutch_temp)),
             ends,
+            best_quality: mean(best_runs.iter().map(|r| drift_quality(r))),
+            top_quality: quality_of(top_runs),
+            top_angle: drifting_angle(top_runs),
+            top_score: mean(top_runs.iter().map(|r| r.score.total())),
+            top_laps: mean(top_runs.iter().map(|r| r.laps())),
+            spins: mean(all.iter().map(|r| f64::from(r.stats.spins))),
+            mean_quality: mean(all.iter().map(|r| drift_quality(r))),
+            handbrake_share: share(|r| r.stats.handbrake_time),
+            clutch_share: share(|r| r.stats.clutch_time),
+            max_angle_p50: percentile(0.5),
+            max_angle_p90: percentile(0.9),
+            above_20_share: share(|r| r.stats.above_20_time),
+            behaviour_diversity: behaviour_diversity(&behaviours),
             diversity: mean(islands.iter().map(|i| diversity(&i.genomes))),
             sigma: mean(islands.iter().flat_map(|i| i.genomes.iter().map(|g| g.sigma))),
             seconds,
@@ -107,34 +161,57 @@ impl Report {
         }
     }
 
+    /// What the console columns mean; printed once at the start.
+    pub fn legend() -> &'static str {
+        "drift q = angle-time (1.0 = a 45° drift held the whole run). top = the most drift-y genome, \
+         best = the fittest. score = banked judged points. angle = typical biggest angle per run. \
+         ends: T time up, NP no progress, CR crashed, ST stalled, SP spun, BK backwards"
+    }
+
+    /// Column headings; printed at the start and every so often.
+    pub fn header() -> String {
+        [
+            "  gen stage │ ── top drifter ──────────── │ ── fittest ────────── │ ── population ────────────────── │ ends %            │ pedals %        │",
+            "            │ drift q  angle  score  laps │ fitness drift q  laps │ drift q  >20°  angle spins  bdiv │  T NP CR ST SP BK │  hb clutch slip │ secs",
+        ]
+        .join("\n")
+    }
+
     pub fn console_line(&self) -> String {
-        let ends: Vec<String> = EndReason::ALL
-            .iter()
-            .zip(self.ends)
-            .filter(|&(_, share)| share > 0.0)
-            .map(|(e, share)| format!("{} {:.0}%", e.name(), share * 100.0))
-            .collect();
+        let end = |reason: EndReason| {
+            let k = EndReason::ALL.iter().position(|&e| e == reason).unwrap_or(0);
+            format!("{:>2.0}", self.ends[k] * 100.0)
+        };
         let test = match (self.test_fitness, self.test_laps) {
-            (Some(f), Some(l)) => format!(" | test {f:.0} ({l:.2} laps)"),
+            (Some(f), Some(l)) => format!("  test: fitness {f:.0}, {l:.2} laps"),
             _ => String::new(),
         };
         format!(
-            "gen {:>4} [{}] best {:>8.1} mean {:>8.1} | best car {:>5.0} m {:.2} laps, score {:.0} | {} | clutch pedal {:.0}% slip {:.0}% peak {:.0}°C | div {:.3} σ {:.3} | {:.1}s {:.1}M steps/s{test}",
+            "{:>5} {:<6}│   {:>5.2} {:>5.0}° {:>6.0} {:>5.2} │ {:>7.0}   {:>5.2} {:>5.2} │   {:>5.2} {:>4.0}% {:>5.0}° {:>5.1} {:>5.3} │ {} {} {} {} {} {} │ {:>3.0} {:>6.0} {:>4.0} │ {:>4.1}{test}",
             self.generation,
             self.stage,
+            self.top_quality,
+            self.top_angle,
+            self.top_score,
+            self.top_laps,
             self.best,
-            self.mean,
-            self.best_progress,
+            self.best_quality,
             self.best_laps,
-            self.best_score.total(),
-            ends.join(" "),
-            self.clutch_pedal * 100.0,
+            self.mean_quality,
+            self.above_20_share * 100.0,
+            self.max_angle_p50,
+            self.spins,
+            self.behaviour_diversity,
+            end(EndReason::TimeUp),
+            end(EndReason::NoProgress),
+            end(EndReason::Crashed),
+            end(EndReason::Stalled),
+            end(EndReason::Spun),
+            end(EndReason::Backwards),
+            self.handbrake_share * 100.0,
+            self.clutch_share * 100.0,
             self.clutch_slip * 100.0,
-            self.clutch_peak,
-            self.diversity,
-            self.sigma,
             self.seconds,
-            self.steps_per_sec / 1e6,
         )
     }
 }
@@ -179,7 +256,29 @@ impl MetricsCsv {
             );
             columns.extend(EndReason::ALL.iter().map(|e| format!("end_{}", e.name().replace(' ', "_"))));
             columns.extend(
-                ["diversity", "sigma", "seconds", "steps_per_sec", "test_fitness", "test_laps"].iter().map(|s| s.to_string()),
+                [
+                    "best_quality",
+                    "mean_quality",
+                    "top_quality",
+                    "top_angle",
+                    "top_score",
+                    "top_laps",
+                    "spins",
+                    "handbrake_share",
+                    "clutch_share",
+                    "max_angle_p50",
+                    "max_angle_p90",
+                    "above_20_share",
+                    "behaviour_diversity",
+                    "diversity",
+                    "sigma",
+                    "seconds",
+                    "steps_per_sec",
+                    "test_fitness",
+                    "test_laps",
+                ]
+                .iter()
+                .map(|s| s.to_string()),
             );
             writeln!(file, "{}", columns.join(","))?;
         }
@@ -217,7 +316,25 @@ impl MetricsCsv {
         for v in r.ends {
             num(v);
         }
-        for v in [r.diversity, r.sigma, r.seconds, r.steps_per_sec] {
+        for v in [
+            r.best_quality,
+            r.mean_quality,
+            r.top_quality,
+            r.top_angle,
+            r.top_score,
+            r.top_laps,
+            r.spins,
+            r.handbrake_share,
+            r.clutch_share,
+            r.max_angle_p50,
+            r.max_angle_p90,
+            r.above_20_share,
+            r.behaviour_diversity,
+            r.diversity,
+            r.sigma,
+            r.seconds,
+            r.steps_per_sec,
+        ] {
             num(v);
         }
         let optional = |v: Option<f64>| v.map_or(String::new(), |v| format!("{v:.4}"));

@@ -18,6 +18,9 @@ reset_rate = 0.002        # chance a parameter is re-drawn from scratch
 immigrants = 2            # fresh random genomes per island per generation
 migration_every = 25      # weakest island may be replaced by the strongest...
 migration_gap = 0.8       # ...if its best is below this share of the strongest's
+selection = "pareto"      # "pareto": rank over (driving, drift quality) so sliders survive; or "scalar"
+reseed_fraction = 0.3     # on a stage change: sigma resets to sigma_start and this share
+reseed_sigma = 0.3        # of each island becomes copies of its best, nudged by this much
 
 # Starting priors for fresh networks. Neutral by default: new networks start
 # out erratic and evolution has to find everything itself. A "calm start"
@@ -25,8 +28,8 @@ migration_gap = 0.8       # ...if its best is below this share of the strongest'
 # throttle, brake/handbrake/clutch off) with output_init_scale = 0.25.
 # Outputs: steer, throttle, brake, handbrake, clutch.
 [network]
-output_bias = [0.0, 0.0, 0.0, 0.0, 0.0]
-output_init_scale = 1.0
+output_bias = [0.0, 0.85, -3.0, -1.5, -1.5]
+output_init_scale = 0.25
 
 # One island per network shape. Output heads are fixed (steer + 4 pedals).
 [[islands]]
@@ -58,44 +61,50 @@ test_every = 10           # best genome vs the library tracks (tracks/*.toml) ev
 [checkpoints]
 every = 10                # full population saved every N generations
 
-# Curriculum: fitness = progress * metres + line/angle/style weights * judged
-# points - penalty * penalty points. Moves on when the generation's best
-# genome averages `at_least` of `metric` for `generations` in a row.
-# Keep penalty weights small: spins and crashes already end the run, and big
-# penalties teach the cars that stopping is safest.
+# Curriculum. Per run:
+#   driving = progress * metres (capped at progress_cap_laps) + time_alive * seconds
+#   fitness = driving * (1 + drift_bonus * drift_quality)
+#           + pedal_bonus * seconds on handbrake/clutch
+#           + line/angle/style * judged points - penalty * penalty points
+# drift_quality is raw angle-time (1.0 = a 45 degree drift held the whole run),
+# so drifting pays from generation 0 whether or not combos get banked.
+# `shaping` softens the rules while learning: drift counts from a few degrees,
+# flat speed multiplier, spins don't end the run, no bobble penalty. The final
+# stage has no shaping, so it's judged on the real config/scoring.toml.
+# Moves on when the generation's best genome averages `at_least` of `metric`
+# for `generations` in a row. Keep penalty weights small: big penalties teach
+# the cars that stopping is safest.
 
-# Stage 1 rewards distance only. Crashing already costs the run (3 hard hits
-# end it); penalising crashes on top teaches "brake to a stop" instead.
 [[curriculum]]
 name = "drive"
 progress = 1.0
+drift_bonus = 1.0
 line = 0.0
 angle = 0.0
 style = 0.0
 penalty = 0.0
+shaping = { drift_start_angle_deg = 5.0, speed_multiplier = 1.0, end_on_spin = false, bobble_penalty = 0.0 }
 advance = { metric = "progress", at_least = 900.0, generations = 10 }
 
 [[curriculum]]
-name = "angle"
-progress = 0.4
+name = "slide"
+progress = 1.0
+progress_cap_laps = 1.0
+time_alive = 5.0
+drift_bonus = 3.0
 line = 0.0
-angle = 1.0
+angle = 0.0
 style = 0.0
-penalty = 0.1
-advance = { metric = "angle", at_least = 400.0, generations = 5 }
+penalty = 0.0
+shaping = { drift_start_angle_deg = 5.0, speed_multiplier = 1.0, end_on_spin = false, bobble_penalty = 0.0 }
+advance = { metric = "drift_quality", at_least = 0.3, generations = 10 }
 
 [[curriculum]]
-name = "line"
-progress = 0.2
-line = 1.0
-angle = 1.0
-style = 0.0
-penalty = 0.25
-advance = { metric = "line", at_least = 400.0, generations = 5 }
-
-[[curriculum]]
-name = "style"
+name = "judged"
 progress = 0.1
+progress_cap_laps = 1.0
+time_alive = 1.0
+drift_bonus = 1.0
 line = 1.0
 angle = 1.0
 style = 1.0
