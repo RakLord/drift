@@ -22,10 +22,12 @@ pub struct Options {
     pub generator: bool,
     /// A trained genome drives instead of you.
     pub genome: Option<PathBuf>,
+    /// Keep loading the newest best genome as training writes it.
+    pub follow: bool,
 }
 
 impl Options {
-    /// `[--seed N] [--map] [--generator] [--genome path] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
+    /// `[--seed N] [--map] [--generator] [--genome path | --follow run] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
     pub fn from_args() -> Self {
         let mut options = Self::default();
         let mut frames = 240;
@@ -41,6 +43,17 @@ impl Options {
                 "--map" => options.map_view = true,
                 "--generator" => options.generator = true,
                 "--genome" => options.genome = args.next().map(PathBuf::from),
+                "--follow" => {
+                    // A run name (runs/<name>/best.genome) or a genome path.
+                    options.genome = args.next().map(|run| {
+                        if run.ends_with(".genome") {
+                            PathBuf::from(run)
+                        } else {
+                            common::paths::workspace_path("runs").join(run).join("best.genome")
+                        }
+                    });
+                    options.follow = true;
+                }
                 other => eprintln!("ignoring unknown argument {other}"),
             }
         }

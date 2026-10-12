@@ -9,7 +9,7 @@ use crate::Controls;
 use crate::World;
 use crate::car::{CarParams, CarState};
 use crate::controller::Controller;
-use crate::scoring::{Breakdown, ScoreEventKind, Scorer, ScoringParams};
+use crate::scoring::{Breakdown, ScoreEvent, ScoreEventKind, Scorer, ScoringParams};
 use crate::sensors::observation::{Observation, Observer};
 use crate::track::Track;
 
@@ -98,6 +98,51 @@ impl EpisodeResult {
     }
 }
 
+/// The rules that end a run, tracked tick by tick. Shared by training
+/// episodes and the viewer's watch mode so both end runs the same way.
+#[derive(Clone, Debug, Default)]
+pub struct Termination {
+    pub best_progress: f64,
+    since_progress: f64,
+    hard_hits: u32,
+}
+
+impl Termination {
+    /// Feed in one tick: the car's progress, that tick's score events, and
+    /// the time since the start. Returns why the run is over, if it is.
+    pub fn update(
+        &mut self,
+        config: &EpisodeConfig,
+        progress: f64,
+        events: &[ScoreEvent],
+        time: f64,
+        dt: f64,
+    ) -> Option<EndReason> {
+        let spun = events.iter().any(|e| e.kind == ScoreEventKind::Spin);
+        self.hard_hits += events.iter().filter(|e| e.kind == ScoreEventKind::HardHit).count() as u32;
+        if progress > self.best_progress + 1.0 {
+            self.best_progress = progress;
+            self.since_progress = 0.0;
+        } else {
+            self.since_progress += dt;
+        }
+
+        if spun && config.end_on_spin {
+            Some(EndReason::Spun)
+        } else if self.hard_hits >= config.max_hard_hits {
+            Some(EndReason::Crashed)
+        } else if progress < self.best_progress - config.max_backwards {
+            Some(EndReason::Backwards)
+        } else if self.since_progress >= config.no_progress_secs {
+            Some(EndReason::NoProgress)
+        } else if time >= config.max_secs {
+            Some(EndReason::TimeUp)
+        } else {
+            None
+        }
+    }
+}
+
 pub struct Episode {
     pub world: World,
     pub scorer: Scorer,
@@ -108,8 +153,7 @@ pub struct Episode {
     /// sharing a frame don't all think on the same tick.
     offset: u32,
     tick: u64,
-    best_progress: f64,
-    since_progress: f64,
+    termination: Termination,
     stats: EpisodeStats,
     end: Option<EndReason>,
 }
@@ -130,8 +174,7 @@ impl Episode {
             held: Controls::default(),
             offset,
             tick: 0,
-            best_progress: 0.0,
-            since_progress: 0.0,
+            termination: Termination::default(),
             stats: EpisodeStats::default(),
             end: None,
         }
@@ -164,10 +207,10 @@ impl Episode {
     pub fn advance(&mut self, controls: Controls) -> Option<EndReason> {
         self.world.step(controls, TICK);
         self.tick += 1;
-        let events = self.scorer.update(&self.world, self.world.contacts(), TICK);
+        self.scorer.update(&self.world, self.world.contacts(), TICK);
+        let events = self.scorer.events();
         let stats = &mut self.stats;
         stats.ticks = self.tick;
-        let mut spun = false;
         for e in events {
             match e.kind {
                 ScoreEventKind::ZoneEnter => stats.zones_entered += 1,
@@ -175,10 +218,7 @@ impl Episode {
                 ScoreEventKind::Transition => stats.transitions += 1,
                 ScoreEventKind::WallTap => stats.wall_taps += 1,
                 ScoreEventKind::HardHit => stats.hard_hits += 1,
-                ScoreEventKind::Spin => {
-                    stats.spins += 1;
-                    spun = true;
-                }
+                ScoreEventKind::Spin => stats.spins += 1,
                 _ => {}
             }
         }
@@ -187,30 +227,12 @@ impl Episode {
             stats.angle_seconds += self.world.car.state.body_slip_angle().abs().to_degrees() * TICK;
         }
 
-        let progress = self.world.progress;
-        if progress > self.best_progress + 1.0 {
-            self.best_progress = progress;
-            self.since_progress = 0.0;
-        } else {
-            self.since_progress += TICK;
-        }
-
         let time = self.tick as f64 * TICK;
-        self.end = if spun && self.config.end_on_spin {
-            Some(EndReason::Spun)
-        } else if self.stats.hard_hits >= self.config.max_hard_hits {
-            Some(EndReason::Crashed)
-        } else if progress < self.best_progress - self.config.max_backwards {
-            Some(EndReason::Backwards)
-        } else if self.since_progress >= self.config.no_progress_secs {
-            Some(EndReason::NoProgress)
-        } else if time >= self.config.max_secs {
+        self.end = self.termination.update(&self.config, self.world.progress, events, time, TICK);
+        if self.end == Some(EndReason::TimeUp) {
             // A drift still going at the bell counts.
             self.scorer.finish();
-            Some(EndReason::TimeUp)
-        } else {
-            None
-        };
+        }
         self.end
     }
 
@@ -224,7 +246,7 @@ impl Episode {
     pub fn result(&self) -> EpisodeResult {
         EpisodeResult {
             score: self.scorer.total,
-            progress: self.best_progress.max(self.world.progress),
+            progress: self.termination.best_progress.max(self.world.progress),
             track_length: self.world.track.length,
             time: self.tick as f64 * TICK,
             end: self.end.unwrap_or(EndReason::TimeUp),

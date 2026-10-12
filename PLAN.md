@@ -44,6 +44,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `cargo run -p viewer -- --seed 7 --map`: open generated track 7 in map view
 - `cargo run --release -p train -- --name <run> [--generations N] [--stage N] [--resume]`: train
 - `cargo run -p viewer -- --genome runs/<run>/best.genome`: watch a trained driver
+- `cargo run -p viewer -- --follow <run>`: watch a run live (picks up each new best between runs)
 
 **Tuning notes**
 - It feels a little icy on keyboard. Retest on gamepad before tuning.
