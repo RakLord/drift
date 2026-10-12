@@ -1,8 +1,10 @@
 //! Run dashboard (C): the followed run's metrics.csv as small multiples,
 //! updating live as the trainer writes. Hover any chart for that
-//! generation's values; dashed lines mark curriculum stage changes.
+//! generation's values; dashed lines mark curriculum stage changes. A meter
+//! under the title shows the saved driver against the current stage's gate.
 
 mod chart;
+mod gate;
 mod metrics;
 
 use std::path::PathBuf;
@@ -11,6 +13,7 @@ use macroquad::prelude::*;
 
 use crate::render::{text, theme};
 use chart::{Chart, Kind, Series, tooltip};
+use gate::Gate;
 use metrics::Metrics;
 
 pub struct Dashboard {
@@ -18,17 +21,27 @@ pub struct Dashboard {
     metrics: Option<Metrics>,
     /// Generation row under the mouse last frame (shared by all charts).
     hover: Option<usize>,
+    gate: Option<Gate>,
+    /// Rows in metrics when `gate` was last read.
+    gate_rows: usize,
 }
 
 impl Dashboard {
     /// `metrics_csv`: the run being watched, if any.
     pub fn new(metrics_csv: Option<PathBuf>, open: bool) -> Self {
-        Self { open, metrics: metrics_csv.map(Metrics::new), hover: None }
+        Self { open, metrics: metrics_csv.map(Metrics::new), hover: None, gate: None, gate_rows: 0 }
     }
 
     pub fn update(&mut self, dt: f64) {
         if let Some(m) = &mut self.metrics {
             m.poll(dt);
+            // Re-read each generation: the stage may have moved on, or the
+            // run's config been edited for a --resume.
+            if m.len() != self.gate_rows {
+                self.gate_rows = m.len();
+                let config = m.path.with_file_name("config").join("training.toml");
+                self.gate = m.len().checked_sub(1).and_then(|last| Gate::load(&config, m.text("stage", last)));
+            }
         }
     }
 
@@ -55,6 +68,13 @@ impl Dashboard {
             m.text("stage", last)
         );
         text(&title, 20.0, 30.0, 22.0, theme::NEON_CYAN);
+        let top = match &self.gate {
+            Some(gate) => {
+                gate.draw(m, 20.0, 58.0);
+                76.0
+            }
+            None => 48.0,
+        };
 
         let percent = |column: &str| m.series(column).into_iter().map(|v| v * 100.0).collect::<Vec<_>>();
         let generations = m.series("generation");
@@ -118,7 +138,7 @@ impl Dashboard {
         // 3 x 2 when there's room, 2 x 3 when narrow.
         let columns = if w > 1400.0 { 3 } else { 2 };
         let rows = charts.len().div_ceil(columns);
-        let (top, gap, margin) = (48.0, 12.0, 16.0);
+        let (gap, margin) = (12.0, 16.0);
         let cell_w = (w - 2.0 * margin - gap * (columns - 1) as f32) / columns as f32;
         let cell_h = (h - top - margin - gap * (rows - 1) as f32) / rows as f32;
 

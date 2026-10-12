@@ -118,7 +118,7 @@ style = 0.0
 penalty = 0.0
 clutch = { strength = 2.0, calm_weight = 0.25 }
 shaping = { drift_start_angle_deg = 5.0, speed_multiplier = 1.0, end_on_spin = false, bobble_penalty = 0.0 }
-advance = { metric = "progress", at_least = 900.0, generations = 10 }
+advance = { metric = "progress", at_least = 750.0, generations = 10 }
 
 [[curriculum]]
 name = "slide"
