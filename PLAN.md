@@ -9,7 +9,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `sim/car`: full car physics driven by `config/car.toml`, plus 12 behaviour tests (`sim/tests/physics.rs`)
 - `viewer`: free-drive screen with gamepad/keyboard, telemetry, smoke, skid marks, live car.toml reload
 
-**In progress: M1**
+**Done: M1**
 - Done:
   - Bezier tracks (`sim/track`, `tracks/test_loop.toml`), hard/soft edges, verge grip
   - wall collisions (`sim/world`)
@@ -19,11 +19,10 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
   - procedural drift-track generator with figure-8 crossroads (`track/generator/`, `track/crossings.rs`, `config/generator.toml`)
   - viewer: `N` new track, `F` generator panel (sliders, save as defaults), `K` keep track, `M` map view
   - track, car, scoring and generator files all hot-reload in the viewer
-- M1 is feature-complete apart from tuning.
 
-**In progress: M2**
+**Done: M2** (a run reached ~0.94 laps of unseen library tracks by gen 60)
 - Done:
-  - `sim`: observation (110 inputs, layout in `sensors/observation.rs`), `Controller` trait, `episode.rs` (rolling start, early termination, stats)
+  - `sim`: observation (111 inputs, layout in `sensors/observation.rs`), `Controller` trait, `episode.rs` (rolling start, early termination, stats)
   - `nn` (own network library), `agent` (network driver, `.genome` files), `evo` (islands, neuron-level crossover, self-adaptive mutation, curriculum)
   - `train`: headless trainer with `config/training.toml`, `runs/<name>/` (metrics.csv, best.genome, checkpoints, config snapshot)
   - viewer `--genome` watch mode (`Tab` take over, `I` inputs panel)
@@ -31,7 +30,10 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
   - clutch heat/fade and stalling (stops the AI riding the clutch), with clutch metrics in the trainer
   - network view (`V`, pulled forward from M4): live layers, edges, inspect, neuron health
   - drift shaping from gen 0, Pareto selection, stage-change reseed, behaviour diversity and drift metrics (after `runs/1` learned to grip-drive)
-- Next: M3, getting the cars to drift (user-led training and shaping).
+
+**In progress: M3**
+- Done: library tracks carry a `test` flag (on unless `test = false`, e.g. the skidpad); the trainer tests only on those.
+- Next, in order: run summary / graphs, track library curation in the viewer, polish phase. Alongside: user-led training to get cars drifting through drive -> slide -> judged.
 
 **Conventions**
 - The sim uses `f64` (SI units). The NN will use `f32`.
@@ -137,7 +139,7 @@ Good driving and drift physics is what gives this project value. The GA will als
   - **Figure-8s:** tracks may cross themselves as **flat crossroads**. Boundaries are opened where they'd sit on the other road. Crossings must be ≥ 35°; parallel overlaps are rejected.
   - **Edges and zones** are assigned from the corner analysis, with no zones at crossroads.
   - **Tuning:** everything is in `config/generator.toml`, and editable live in the viewer's generator panel (`F`), which can save it back.
-- **Track library:** about 15 approved tracks, saved to disk. A good generated track can be approved into the library. Some library tracks are held out as **test tracks** that are never trained on.
+- **Track library:** about 15 approved tracks, saved to disk. A good generated track can be approved into the library (`K`). Library tracks are never trained on; those with `test` on (the default) form the **test set** the trainer measures generalisation on.
 - **Bezier editor:** later, not v1.
 
 ## Scoring

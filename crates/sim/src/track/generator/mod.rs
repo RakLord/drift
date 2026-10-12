@@ -197,6 +197,7 @@ fn attempt_track(p: &GeneratorParams, rng: &mut Rng, seed: u64) -> Result<TrackD
         name: format!("Generated {seed}"),
         width: range(rng, p.surface.width),
         verge: p.surface.verge,
+        test: true,
         anchors: turtle.anchors(),
         zones: vec![],
     };

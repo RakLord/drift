@@ -62,3 +62,11 @@ fn driver_prep_counts_down_to_the_next_corner() {
     let f = features(&upcoming(&track, 0.0));
     assert!(f.iter().all(|v| (-1.0..=1.0).contains(v)), "{f:?}");
 }
+
+#[test]
+fn skidpad_is_not_a_test_track_but_courses_are() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tracks");
+    let load = |name: &str| TrackDef::load(dir.join(name)).unwrap();
+    assert!(!load("skidpad.toml").test);
+    assert!(load("test_loop.toml").test, "tracks are test tracks unless they opt out");
+}

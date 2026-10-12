@@ -22,6 +22,11 @@ pub struct TrackDef {
     /// Closed loop, in driving order. Anchor `i` starts the section that runs
     /// to anchor `i + 1` (the last wraps to the first).
     pub anchors: Vec<AnchorDef>,
+    /// Whether this library track is part of the held-out test set the
+    /// trainer measures generalisation on. On unless the file says
+    /// `test = false` (e.g. the skidpad, which isn't a course).
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub test: bool,
     /// Judged zones. Positions are section coordinates: anchor index plus a
     /// fraction of the way to the next anchor (e.g. 3.5 = halfway through the
     /// section starting at anchor 3), so zones move with their corner.
@@ -67,6 +72,14 @@ impl AnchorDef {
     pub fn position(&self) -> Vec2 {
         Vec2::new(self.pos[0], self.pos[1])
     }
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_yes(value: &bool) -> bool {
+    *value
 }
 
 impl TrackDef {

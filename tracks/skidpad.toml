@@ -3,6 +3,7 @@
 
 version = 1
 name = "Skidpad"
+test = false                   # open pad, not a course: not part of the trainer's test set
 width = 70.0
 verge = 8.0
 

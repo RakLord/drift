@@ -75,14 +75,15 @@ fn snapshot(dir: &Path, name: &str, value: &impl Serialize) -> std::io::Result<(
     std::fs::write(dir.join(name), toml::to_string_pretty(value).map_err(std::io::Error::other)?)
 }
 
-/// Every library track (tracks/*.toml), used as a held-out test set.
+/// The held-out test set: library tracks (tracks/*.toml) not marked
+/// `test = false`.
 fn library_tracks() -> Vec<Arc<Track>> {
     let Ok(entries) = std::fs::read_dir(workspace_path("tracks")) else { return vec![] };
     let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "toml")).collect();
     paths.sort();
     paths
         .iter()
-        .filter_map(|p| TrackDef::load(p).ok().and_then(|def| Track::build(def).ok()))
+        .filter_map(|p| TrackDef::load(p).ok().filter(|def| def.test).and_then(|def| Track::build(def).ok()))
         .map(Arc::new)
         .collect()
 }
@@ -169,13 +170,14 @@ fn run(args: Args) -> Result<(), String> {
 
     let shapes: Vec<String> = pop.islands.iter().map(|i| i.spec.describe()).collect();
     println!(
-        "run '{}': {} islands x {} [{}], {} tracks/gen, {} library test tracks, {} threads",
+        "run '{}': {} islands x {} [{}], {} tracks/gen, test tracks: {} ({}), {} threads",
         args.name,
         pop.islands.len(),
         cfg.ga.population,
         shapes.join(", "),
         cfg.tracks.per_generation,
         test_tracks.len(),
+        test_tracks.iter().map(|t| t.def.name.as_str()).collect::<Vec<_>>().join(", "),
         rayon::current_num_threads()
     );
 

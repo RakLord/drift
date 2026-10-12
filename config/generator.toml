@@ -1,29 +1,33 @@
-# Procedural drift tracks: a run of corner pieces, then the shortest smooth
-# path back to the start. Tuned for compact, constantly-turning drift courses
-# (no long straights). The viewer's generator panel (F) edits these live and
-# "save defaults" writes them back here (without these comments).
+# Procedural drift tracks. Saved from the viewer's generator panel (F).
+# Field meanings: crates/sim/src/track/generator/mod.rs and the panel labels.
 
 attempts = 1500
 
 [layout]
-length_min = 500.0          # metres
+length_min = 500.0
 length_max = 1800.0
 pieces_min = 6
 pieces_max = 12
-initiation = [30.0, 60.0]   # straight before the first piece, metres
-straight_chance = 0.02      # chance of a straight between pieces...
-straight = [10.0, 35.0]     # ...this long
-homing = 0.3                # chance the first piece turns back towards the start...
-homing_end = 0.85           # ...rising to this by the last piece (keeps tracks compact)
-figure8 = 0.39              # chance a piece follows a figure-8 plan (first half one way, second half the other)
-closing_radius = 28.0       # tightest radius of the path that closes the loop
-max_closing_straight = 35.0 # metres; longer closing straights are rejected (no drag strips)
-max_closing_turn = 360.0    # degrees; a full closing loop makes a drift circle
-return_pieces = 4           # extra pieces allowed to head back if the track ends far from the start
-min_crossings = 1           # 1+ only accepts figure-8 style tracks
-max_crossings = 3
+initiation = [
+    30.0,
+    60.0,
+]
+straight_chance = 0.02
+straight = [
+    10.0,
+    35.0,
+]
+homing = 0.3
+homing_end = 0.85
+figure8 = 0.39
+closing_radius = 28.0
+max_closing_straight = 35.0
+max_closing_turn = 360.0
+return_pieces = 4
+min_crossings = 0
+max_crossings = 1
 
-[pieces]                    # relative chance of each piece
+[pieces]
 hairpin = 2.5
 sweeper = 2.5
 s_bend = 3.5
@@ -31,33 +35,81 @@ decreasing = 1.5
 chicane = 1.5
 kink = 0.5
 
-[shapes]                    # [min, max]; radii in metres, angles in degrees
-hairpin_radius = [20.0, 32.0]
-hairpin_angle = [150.0, 190.0]
-sweeper_radius = [45.0, 90.0]
-sweeper_angle = [60.0, 120.0]
-s_bend_radius = [30.0, 60.0]
-s_bend_angle = [50.0, 100.0]
-s_bend_gap = [0.0, 15.0]    # straight between the two halves
-decreasing_open_radius = [70.0, 110.0]
-decreasing_tight_radius = [30.0, 45.0]
-decreasing_angle = [40.0, 70.0]   # each half
-chicane_radius = [35.0, 55.0]
-chicane_angle = [30.0, 50.0]
-chicane_flicks = [3.0, 4.0]
-kink_radius = [60.0, 120.0]
-kink_angle = [20.0, 40.0]
+[shapes]
+hairpin_radius = [
+    20.0,
+    32.0,
+]
+hairpin_angle = [
+    150.0,
+    190.0,
+]
+sweeper_radius = [
+    45.0,
+    90.0,
+]
+sweeper_angle = [
+    60.0,
+    120.0,
+]
+s_bend_radius = [
+    30.0,
+    60.0,
+]
+s_bend_angle = [
+    50.0,
+    100.0,
+]
+s_bend_gap = [
+    0.0,
+    15.0,
+]
+decreasing_open_radius = [
+    70.0,
+    110.0,
+]
+decreasing_tight_radius = [
+    30.0,
+    45.0,
+]
+decreasing_angle = [
+    40.0,
+    70.0,
+]
+chicane_radius = [
+    35.0,
+    55.0,
+]
+chicane_angle = [
+    30.0,
+    50.0,
+]
+chicane_flicks = [
+    3.0,
+    4.0,
+]
+kink_radius = [
+    60.0,
+    120.0,
+]
+kink_angle = [
+    20.0,
+    40.0,
+]
 
 [surface]
-width = [12.0, 15.0]
+width = [
+    12.0,
+    15.0,
+]
 verge = 8.0
-corner_radius = 150.0       # sections tighter than this count as corners
-outside_hard_chance = 0.65  # wall on the outside of a corner
+corner_radius = 150.0
+outside_hard_chance = 0.65
 inside_hard_chance = 0.1
 straight_hard_chance = 0.15
 
 [zones]
-clip_min_angle = 30.0       # corners turning at least this many degrees get a clip
-outer_min_angle = 45.0      # ...and at least this many get an outer zone
-outer_start = 0.25          # outer zone from this fraction through the corner...
-outer_end = 1.05            # ...to this one (a little past the exit)
+clip_min_angle = 30.0
+outer_min_angle = 45.0
+outer_start = 0.25
+outer_end = 1.05

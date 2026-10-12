@@ -27,6 +27,7 @@ pub fn oval(left: EdgeKind, right: EdgeKind, zones: Vec<ZoneDef>) -> Arc<Track> 
         name: "test oval".into(),
         width: 12.0,
         verge: 8.0,
+        test: true,
         anchors: points.iter().map(|&(pos, handle)| AnchorDef { pos, handle: Some(handle), handle_in: None, left, right }).collect(),
         zones,
     };

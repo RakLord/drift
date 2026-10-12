@@ -26,7 +26,7 @@ fn figure_eight(edge: EdgeKind) -> Result<Track, TrackError> {
         a.left = edge;
         a.right = edge;
     }
-    Track::build(TrackDef { version: 1, name: "figure 8".into(), width: 12.0, verge: 8.0, anchors, zones: vec![] })
+    Track::build(TrackDef { version: 1, name: "figure 8".into(), width: 12.0, verge: 8.0, test: true, anchors, zones: vec![] })
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn a_car_drives_straight_through_without_touching_anything() {
 }
 
 fn build(t: &Turtle) -> Result<Track, TrackError> {
-    Track::build(TrackDef { version: 1, name: "test".into(), width: 12.0, verge: 8.0, anchors: t.anchors(), zones: vec![] })
+    Track::build(TrackDef { version: 1, name: "test".into(), width: 12.0, verge: 8.0, test: true, anchors: t.anchors(), zones: vec![] })
 }
 
 #[test]
