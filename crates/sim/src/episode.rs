@@ -16,6 +16,9 @@ use crate::track::Track;
 pub const TICK: f64 = 1.0 / 120.0;
 /// Below this speed (m/s) drift angles are noise and aren't counted.
 const MOVING: f64 = 3.0;
+/// Clutch held at this drift angle (degrees) or more counts in full in
+/// `EpisodeStats::clutch_hold_angle`.
+pub const CLUTCH_FULL_ANGLE_DEG: f64 = 45.0;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,6 +39,14 @@ pub struct EpisodeConfig {
     /// Ends the run on this many hard wall hits.
     pub max_hard_hits: u32,
     pub end_on_spin: bool,
+    /// A clutch press shorter than this is a kick; holding it longer counts
+    /// towards `EpisodeStats::clutch_hold_time`, seconds.
+    #[serde(default = "default_clutch_grace_secs")]
+    pub clutch_grace_secs: f64,
+}
+
+fn default_clutch_grace_secs() -> f64 {
+    0.4
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +96,14 @@ pub struct EpisodeStats {
     /// Seconds with the handbrake and the clutch pedal past their free play.
     pub handbrake_time: f64,
     pub clutch_time: f64,
+    /// Seconds with the clutch held past its free play for longer than a
+    /// kick (`EpisodeConfig::clutch_grace_secs`)...
+    #[serde(default)]
+    pub clutch_hold_time: f64,
+    /// ...and the same, each second weighted by drift angle (0 at no angle
+    /// or standing still, 1 at `CLUTCH_FULL_ANGLE_DEG` and over).
+    #[serde(default)]
+    pub clutch_hold_angle: f64,
     /// Largest drift angle reached, degrees.
     pub max_angle: f64,
     /// Seconds spent above 20 degrees of drift angle (moving).
@@ -176,6 +195,8 @@ pub struct Episode {
     tick: u64,
     termination: Termination,
     stats: EpisodeStats,
+    /// How long the clutch has been held in this press, seconds.
+    clutch_held: f64,
     end: Option<EndReason>,
 }
 
@@ -197,6 +218,7 @@ impl Episode {
             tick: 0,
             termination: Termination::default(),
             stats: EpisodeStats::default(),
+            clutch_held: 0.0,
             end: None,
         }
     }
@@ -248,15 +270,20 @@ impl Episode {
         if controls.handbrake > car.params.brakes.handbrake_free_play {
             stats.handbrake_time += TICK;
         }
+        let angle = if car.state.speed() > MOVING { car.state.body_slip_angle().abs().to_degrees() } else { 0.0 };
         if controls.clutch > car.params.clutch.free_play {
             stats.clutch_time += TICK;
-        }
-        if car.state.speed() > MOVING {
-            let angle = car.state.body_slip_angle().abs().to_degrees();
-            stats.max_angle = stats.max_angle.max(angle);
-            if angle > 20.0 {
-                stats.above_20_time += TICK;
+            self.clutch_held += TICK;
+            if self.clutch_held > self.config.clutch_grace_secs {
+                stats.clutch_hold_time += TICK;
+                stats.clutch_hold_angle += (angle / CLUTCH_FULL_ANGLE_DEG).min(1.0) * TICK;
             }
+        } else {
+            self.clutch_held = 0.0;
+        }
+        stats.max_angle = stats.max_angle.max(angle);
+        if angle > 20.0 {
+            stats.above_20_time += TICK;
         }
         if crate::car::engine::in_bite_zone(&car.params.clutch, controls.clutch) {
             stats.clutch_pedal_time += TICK;

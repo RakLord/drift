@@ -23,6 +23,7 @@ fn config() -> EpisodeConfig {
         max_backwards: 20.0,
         max_hard_hits: 3,
         end_on_spin: true,
+        clutch_grace_secs: 0.4,
     }
 }
 
@@ -126,4 +127,30 @@ fn stopping_ends_the_run_for_no_progress() {
     let result = episode(1).run(&mut Stop);
     assert_eq!(result.end, EndReason::NoProgress);
     assert!(result.time < 10.0);
+}
+
+#[test]
+fn clutch_kicks_are_free_but_holding_it_counts() {
+    // Follows the track, pressing the clutch for `press` ticks out of every 120.
+    struct Clutcher {
+        follow: Follower,
+        press: u64,
+        tick: u64,
+    }
+    impl Controller for Clutcher {
+        fn decide(&mut self, obs: &Observation) -> Controls {
+            let clutch = if self.tick % 120 < self.press { 1.0 } else { 0.0 };
+            self.tick += 4;
+            Controls { clutch, ..self.follow.decide(obs) }
+        }
+    }
+    let run = |press| episode(1).run(&mut Clutcher { follow: Follower { throttle: 0.2 }, press, tick: 0 });
+    let kicks = run(24);
+    assert!(kicks.stats.clutch_time > 1.0);
+    assert_eq!(kicks.stats.clutch_hold_time, 0.0);
+    let held = run(96);
+    // Each 0.8 s press holds for about 0.4 s past the kick grace.
+    let share = held.stats.clutch_hold_time / held.time;
+    assert!((share - 0.4).abs() < 0.05, "held {:.0}% of the time", share * 100.0);
+    assert!(held.stats.clutch_hold_angle <= held.stats.clutch_hold_time);
 }

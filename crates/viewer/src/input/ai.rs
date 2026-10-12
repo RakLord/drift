@@ -47,6 +47,7 @@ impl RunSettings {
                 max_backwards: 20.0,
                 max_hard_hits: 3,
                 end_on_spin: true,
+                clutch_grace_secs: 0.4,
             },
             |f| f.episode,
         );

@@ -223,6 +223,7 @@ Outputs are produced once per decision and held until the next one.
 - **Crossover:** neuron-level (a child takes each hidden neuron's whole incoming weight set from one parent).
 - **Mutation:** Gaussian noise on a random subset of weights, plus a rare large reset. σ shrinks over time or self-adapts per genome.
 - **Fitness (shaped from gen 0):** driving reward (progress, capped after stage 1, plus time alive) multiplied by (1 + drift_bonus × drift quality), where drift quality is raw angle-time. Banked judged score (Line/Angle/Style) counts in the final stage. Stages: drive → slide → judged. Shaping stages soften the scoring (drift from 5°, flat speed multiplier, spins don't end the run, no bobble penalty).
+- **Clutch penalty (`clutch` per stage):** a press shorter than 0.4 s is a kick and is free. Holding the clutch any longer counts, each second weighted by drift angle (0.25 with no angle, rising to 1 at 45°). The run's reward and both Pareto objectives are scaled by 1 − strength × (weighted hold time ÷ run time), never below 0. Strength 2 in every stage. Logged as `clutch_hold` / `clutch_hold_angle`.
 - **Selection:** Pareto ranking over (driving, drift quality) inside each island, so slidey crashers survive alongside grip drivers.
 - **Stage change:** σ resets and 30% of each island is reseeded with heavily mutated copies of its best.
 - **Starting priors:** calm start (straight, some throttle, brake off, handbrake/clutch light).
@@ -267,6 +268,7 @@ Outputs are produced once per decision and held until the next one.
   - average drift angle
   - laps completed
   - zones hit
+  - pedal use: handbrake, clutch, clutch slip, clutch held past a kick
 - **Health:**
   - diversity
   - mutation σ

@@ -4,6 +4,8 @@
 //! rather than banked combo points, and multiplies the driving reward so a
 //! car that slides and survives beats one that grips: `fitness = (progress +
 //! time alive) x (1 + drift_bonus x drift_quality) + judged score terms`.
+//! Holding the clutch (rather than kicking it) scales a run's reward down,
+//! harder the more sideways the car is.
 //! Shaping stages also soften the scoring rules (drift counts from a few
 //! degrees, spins don't end the run); the final stage is judged for real.
 
@@ -41,6 +43,9 @@ pub struct Stage {
     pub style: f64,
     /// Weight on penalty points (spins, crashes, bobbles).
     pub penalty: f64,
+    /// Cost of holding the clutch (none = free).
+    #[serde(default)]
+    pub clutch: Option<ClutchPenalty>,
     /// Softer rules while learning to drift (none = the real rules).
     #[serde(default)]
     pub shaping: Option<Shaping>,
@@ -66,6 +71,31 @@ pub struct Polish {
     /// Generated tracks per generation (replaces `tracks.per_generation`).
     #[serde(default)]
     pub tracks_per_generation: Option<u32>,
+}
+
+/// Holding the clutch past a kick scales the run's reward by `1 - strength
+/// x cost` (never below 0), where cost is the share of the run spent holding
+/// it, each second weighted from `calm_weight` with no drift angle up to 1 at
+/// a big angle (`sim::episode::CLUTCH_FULL_ANGLE_DEG`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClutchPenalty {
+    pub strength: f64,
+    pub calm_weight: f64,
+}
+
+impl ClutchPenalty {
+    /// Share of the run spent holding the clutch, weighted by angle.
+    pub fn cost(&self, r: &EpisodeResult) -> f64 {
+        let s = &r.stats;
+        let weighted = self.calm_weight * s.clutch_hold_time + (1.0 - self.calm_weight) * s.clutch_hold_angle;
+        weighted / r.time.max(1e-9)
+    }
+
+    /// Share of the run's reward it keeps.
+    pub fn factor(&self, r: &EpisodeResult) -> f64 {
+        (1.0 - self.strength * self.cost(r)).max(0.0)
+    }
 }
 
 /// Scoring and episode rules for shaping stages.
@@ -148,11 +178,17 @@ impl Stage {
         self.progress * credited + self.time_alive * r.time
     }
 
+    /// Share of a run's reward kept after the clutch penalty (1 = none).
+    pub fn clutch_factor(&self, r: &EpisodeResult) -> f64 {
+        self.clutch.as_ref().map_or(1.0, |c| c.factor(r))
+    }
+
     fn run_fitness(&self, r: &EpisodeResult) -> f64 {
         let s = &r.score;
         let shaped = self.base(r) * (1.0 + self.drift_bonus * drift_quality(r));
         let pedals = self.pedal_bonus * (r.stats.handbrake_time + r.stats.clutch_time);
-        shaped + pedals + self.line * s.line + self.angle * s.angle + self.style * s.style - self.penalty * s.penalty
+        let reward = shaped + pedals + self.line * s.line + self.angle * s.angle + self.style * s.style;
+        reward * self.clutch_factor(r) - self.penalty * s.penalty
     }
 
     /// A genome's fitness: the average over its runs (one per track).
@@ -161,9 +197,10 @@ impl Stage {
     }
 
     /// The two things selection trades off: driving (progress / staying
-    /// alive) and drifting (drift quality), each averaged over the runs.
+    /// alive) and drifting (drift quality), each averaged over the runs and
+    /// both cut by the clutch penalty.
     pub fn objectives(&self, results: &[EpisodeResult]) -> [f64; 2] {
-        [mean(results, |r| self.base(r)), mean(results, drift_quality)]
+        [mean(results, |r| self.base(r) * self.clutch_factor(r)), mean(results, |r| drift_quality(r) * self.clutch_factor(r))]
     }
 
     /// GA settings for this stage: the base ones, with any polish applied.
@@ -263,6 +300,7 @@ mod tests {
             angle,
             style: 0.0,
             penalty: 1.0,
+            clutch: None,
             shaping: None,
             advance,
             polish: None,
@@ -281,6 +319,26 @@ mod tests {
         assert_eq!(s.fitness(&[grip]), 500.0);
         assert!((s.fitness(&[slide]) - 500.0 * (1.0 + 2.0 * quality)).abs() < 1e-9);
         assert_eq!(s.objectives(&[slide])[0], 500.0);
+    }
+
+    #[test]
+    fn holding_the_clutch_costs_more_at_angle() {
+        let s = Stage { penalty: 0.0, clutch: Some(ClutchPenalty { strength: 2.0, calm_weight: 0.25 }), ..stage(1.0, 0.0, None) };
+        let mut kicks = result(600.0, 0.0, 0.0);
+        kicks.stats.clutch_time = 3.0;
+        // 9 s of a 30 s run held in: straight, then the same at full angle.
+        let mut straight = kicks;
+        straight.stats.clutch_hold_time = 9.0;
+        let mut sideways = straight;
+        sideways.stats.clutch_hold_angle = 9.0;
+        assert_eq!(s.fitness(&[kicks]), 600.0);
+        assert!((s.fitness(&[straight]) - 600.0 * (1.0 - 2.0 * 0.25 * 0.3)).abs() < 1e-9);
+        assert!((s.fitness(&[sideways]) - 600.0 * (1.0 - 2.0 * 0.3)).abs() < 1e-9);
+        assert!((s.objectives(&[sideways])[0] - 600.0 * 0.4).abs() < 1e-9);
+        // Never flips the reward negative.
+        sideways.stats.clutch_hold_angle = 30.0;
+        sideways.stats.clutch_hold_time = 30.0;
+        assert_eq!(s.fitness(&[sideways]), 0.0);
     }
 
     #[test]
@@ -304,6 +362,7 @@ mod tests {
             max_backwards: 20.0,
             max_hard_hits: 3,
             end_on_spin: true,
+            clutch_grace_secs: 0.4,
         };
         let (scoring, episode) = s.rules(&real, &episode);
         assert_eq!(scoring.drift.start_angle_deg, 5.0);

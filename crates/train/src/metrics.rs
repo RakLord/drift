@@ -69,6 +69,10 @@ pub struct Report {
     /// Share of time with the handbrake on / clutch past its free play.
     pub handbrake_share: f64,
     pub clutch_share: f64,
+    /// Share of time holding the clutch past a kick, and the same weighted
+    /// by drift angle (what the clutch penalty charges for).
+    pub clutch_hold: f64,
+    pub clutch_hold_angle: f64,
     /// Largest drift angle per run: median and 90th percentile, degrees.
     pub max_angle_p50: f64,
     pub max_angle_p90: f64,
@@ -167,6 +171,8 @@ impl Report {
             mean_quality: mean(all.iter().map(|r| drift_quality(r))),
             handbrake_share: share(|r| r.stats.handbrake_time),
             clutch_share: share(|r| r.stats.clutch_time),
+            clutch_hold: share(|r| r.stats.clutch_hold_time),
+            clutch_hold_angle: share(|r| r.stats.clutch_hold_angle),
             max_angle_p50: percentile(0.5),
             max_angle_p90: percentile(0.9),
             above_20_share: share(|r| r.stats.above_20_time),
@@ -190,8 +196,8 @@ impl Report {
     /// Column headings; printed at the start and every so often.
     pub fn header() -> String {
         [
-            "  gen stage │ ── top drifter ──────────── │ ── saved best ──────────── │ ── population ────────────────── │ ends %            │ pedals %        │",
-            "            │ drift q  angle  score  laps │ fitness drift q  laps    # │ drift q  >20°  angle spins  bdiv │  T NP CR ST SP BK │  hb clutch slip │ secs",
+            "  gen stage │ ── top drifter ──────────── │ ── saved best ──────────── │ ── population ────────────────── │ ends %            │ pedals %             │",
+            "            │ drift q  angle  score  laps │ fitness drift q  laps    # │ drift q  >20°  angle spins  bdiv │  T NP CR ST SP BK │  hb clutch slip hold │ secs",
         ]
         .join("\n")
     }
@@ -206,7 +212,7 @@ impl Report {
             _ => String::new(),
         };
         format!(
-            "{:>5} {:<6}│   {:>5.2} {:>5.0}° {:>6.0} {:>5.2} │ {:>7.0}   {:>5.2} {:>5.2} {:>4} │   {:>5.2} {:>4.0}% {:>5.0}° {:>5.1} {:>5.3} │ {} {} {} {} {} {} │ {:>3.0} {:>6.0} {:>4.0} │ {:>4.1}{test}",
+            "{:>5} {:<6}│   {:>5.2} {:>5.0}° {:>6.0} {:>5.2} │ {:>7.0}   {:>5.2} {:>5.2} {:>4} │   {:>5.2} {:>4.0}% {:>5.0}° {:>5.1} {:>5.3} │ {} {} {} {} {} {} │ {:>3.0} {:>6.0} {:>4.0} {:>4.0} │ {:>4.1}{test}",
             self.generation,
             self.stage,
             self.top_quality,
@@ -231,6 +237,7 @@ impl Report {
             self.handbrake_share * 100.0,
             self.clutch_share * 100.0,
             self.clutch_slip * 100.0,
+            self.clutch_hold * 100.0,
             self.seconds,
         )
     }
@@ -317,6 +324,8 @@ impl Report {
             ("spins", self.spins),
             ("handbrake_share", self.handbrake_share),
             ("clutch_share", self.clutch_share),
+            ("clutch_hold", self.clutch_hold),
+            ("clutch_hold_angle", self.clutch_hold_angle),
             ("max_angle_p50", self.max_angle_p50),
             ("max_angle_p90", self.max_angle_p90),
             ("above_20_share", self.above_20_share),
