@@ -7,7 +7,7 @@ use inquire::{Confirm, CustomType, InquireError, MultiSelect, Select, Text};
 
 use crate::launch::{self, Children};
 use crate::runs::{self, Run};
-use crate::tracks::{self, SavedTrack};
+use crate::tracks::{self, SavedTrack, TrackChoice};
 use crate::paths;
 
 #[derive(Default)]
@@ -44,8 +44,7 @@ pub type Flow = Result<String, Exit>;
 /// Settings a new run starts from (config/training.toml).
 struct Defaults {
     generations: u32,
-    per_generation: u32,
-    fixed: Vec<String>,
+    tracks: TrackChoice,
 }
 
 impl Defaults {
@@ -54,18 +53,72 @@ impl Defaults {
             .ok()
             .and_then(|t| t.parse::<toml::Table>().ok())
             .unwrap_or_default();
-        let tracks = table.get("tracks").and_then(|t| t.as_table());
-        let int = |v: Option<&toml::Value>, default: u32| v.and_then(|v| v.as_integer()).map_or(default, |n| n as u32);
         Self {
-            generations: int(table.get("generations"), 500),
-            per_generation: int(tracks.and_then(|t| t.get("per_generation")), 3),
-            fixed: tracks
-                .and_then(|t| t.get("fixed"))
-                .and_then(|f| f.as_array())
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                .unwrap_or_default(),
+            generations: table.get("generations").and_then(|v| v.as_integer()).map_or(500, |n| n as u32),
+            tracks: TrackChoice::from_table(table.get("tracks").and_then(|t| t.as_table())),
         }
     }
+}
+
+/// Ask what to train on, starting from `current`: fixed maps, then a pool
+/// from the rest, then generated tracks.
+fn prompt_tracks(current: &TrackChoice) -> Result<TrackChoice, Exit> {
+    // Only real courses: tracks marked `test = false` (the skidpad) aren't.
+    let courses: Vec<SavedTrack> = tracks::all().into_iter().filter(|t| t.test).collect();
+    let fixed = pick_tracks(
+        "Maps to train on every generation:",
+        courses.clone(),
+        &current.fixed,
+        "space toggle · enter confirm · none is fine",
+    )?;
+
+    let rest: Vec<SavedTrack> = courses.into_iter().filter(|t| !fixed.contains(&t.path)).collect();
+    let pool = if rest.is_empty() {
+        vec![]
+    } else {
+        pick_tracks(
+            "Pool: maps to draw a few from each generation:",
+            rest,
+            &current.pool,
+            "space toggle · enter confirm · none = no pool · pool maps also feed the best-driver check runs",
+        )?
+    };
+    let pooled = if pool.is_empty() {
+        0
+    } else {
+        let len = pool.len() as u32;
+        let default = if current.pooled == 0 { 2 } else { current.pooled };
+        CustomType::<u32>::new(&format!("Pool maps per generation (of {len}):"))
+            .with_default(default.clamp(1, len))
+            .with_help_message("a fresh draw each generation")
+            .with_validator(move |n: &u32| {
+                Ok(if (1..=len).contains(n) { Validation::Valid } else { Validation::Invalid(format!("1 to {len}").into()) })
+            })
+            .prompt()?
+    };
+
+    let need_generated = fixed.is_empty() && pooled == 0;
+    let generated = CustomType::<u32>::new("Generated tracks per generation:")
+        .with_default(if need_generated { current.generated.max(1) } else { current.generated })
+        .with_help_message("fresh procedural tracks each generation, alongside your maps (0 = your maps only)")
+        .with_validator(move |n: &u32| {
+            Ok(if need_generated && *n == 0 { Validation::Invalid("no maps picked: need at least 1".into()) } else { Validation::Valid })
+        })
+        .prompt()?;
+    Ok(TrackChoice { fixed, pool, pooled, generated })
+}
+
+/// Multi-select saved tracks, with `selected` ticked to start.
+fn pick_tracks(prompt: &str, options: Vec<SavedTrack>, selected: &[String], help: &str) -> Result<Vec<String>, Exit> {
+    let ticked: Vec<usize> = options.iter().enumerate().filter(|(_, t)| selected.contains(&t.path)).map(|(i, _)| i).collect();
+    Ok(MultiSelect::new(prompt, options)
+        .with_default(&ticked)
+        .with_page_size(15)
+        .with_help_message(help)
+        .prompt()?
+        .into_iter()
+        .map(|t| t.path)
+        .collect())
 }
 
 impl App {
@@ -94,64 +147,35 @@ impl App {
             })
             .prompt()?;
 
-        // Only real courses: tracks marked `test = false` (the skidpad) aren't.
-        let courses: Vec<SavedTrack> = tracks::all().into_iter().filter(|t| t.test).collect();
-        let selected: Vec<usize> = courses
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| preselect.map_or_else(|| defaults.fixed.contains(&t.path), |p| p == t.path))
-            .map(|(i, _)| i)
-            .collect();
-        let fixed: Vec<String> = MultiSelect::new("Your maps to train on every generation:", courses)
-            .with_default(&selected)
-            .with_help_message("space toggle · enter confirm · none = generated tracks only")
-            .prompt()?
-            .into_iter()
-            .map(|t| t.path)
-            .collect();
-
-        let need_generated = fixed.is_empty();
-        let generated = CustomType::<u32>::new("Generated tracks per generation:")
-            .with_default(if need_generated { defaults.per_generation.max(1) } else { defaults.per_generation })
-            .with_help_message("fresh procedural tracks each generation, alongside your maps (0 = your maps only)")
-            .with_validator(move |n: &u32| {
-                Ok(if need_generated && *n == 0 { Validation::Invalid("no maps picked: need at least 1".into()) } else { Validation::Valid })
-            })
-            .prompt()?;
+        let mut start = defaults.tracks.clone();
+        if let Some(track) = preselect {
+            start.pool.retain(|p| p != track);
+            start.fixed = vec![track.to_owned()];
+        }
+        let chosen = prompt_tracks(&start)?;
         let generations = CustomType::<u32>::new("Generations:")
             .with_default(defaults.generations)
             .with_validator(|n: &u32| Ok(if *n == 0 { Validation::Invalid("at least 1".into()) } else { Validation::Valid }))
             .prompt()?;
 
-        let maps: Vec<String> = fixed.iter().map(|f| tracks::stem(f)).collect();
-        let summary = match (maps.is_empty(), generated) {
-            (true, n) => format!("{n} generated"),
-            (false, 0) => maps.join(" + "),
-            (false, n) => format!("{} + {n} generated", maps.join(" + ")),
-        };
+        let summary = chosen.summary();
         if !Confirm::new(&format!("Start {name}: {generations} generations on {summary} per generation?")).with_default(true).prompt()? {
             return Err(Exit::Back);
         }
 
         let mut args = vec!["--name".to_string(), name.clone(), "--generations".into(), generations.to_string()];
-        if fixed.is_empty() {
-            args.push("--no-fixed".into());
-        }
-        for path in &fixed {
-            args.extend(["--track".into(), path.clone()]);
-        }
-        args.extend(["--generated".into(), generated.to_string()]);
+        args.extend(chosen.args());
         self.children.trainer(&name, &args)?;
 
         if Confirm::new("Watch it now?").with_default(true).prompt().unwrap_or(false) {
-            self.open_viewer(&name, fixed.first())?;
+            self.open_viewer(&name, chosen.fixed.first())?;
         }
         Ok(format!("started {name} (log: runs/{name}/train.log)"))
     }
 
     pub fn watch(&mut self, run: &Run) -> Flow {
-        self.open_viewer(&run.name, run.fixed.first())?;
-        let on = run.fixed.first().map_or_else(|| "test_loop".into(), |f| tracks::stem(f));
+        self.open_viewer(&run.name, run.tracks.fixed.first())?;
+        let on = run.tracks.fixed.first().map_or_else(|| "test_loop".into(), |f| tracks::stem(f));
         Ok(format!("viewer following {} on {on}", run.name))
     }
 
@@ -191,11 +215,19 @@ impl App {
                 Ok(if *n <= current { Validation::Invalid(format!("it's already at generation {current}").into()) } else { Validation::Valid })
             })
             .prompt()?;
+        let change = Confirm::new(&format!("Change its tracks? (now {})", run.tracks.summary()))
+            .with_default(false)
+            .with_help_message("saved into the run's config, so later resumes keep them")
+            .prompt()?;
+        let tracks = if change { Some(prompt_tracks(&run.tracks)?) } else { None };
+
         let from = run.last_checkpoint.map_or_else(|| "the start (no checkpoint yet)".into(), |c| format!("its checkpoint at gen {c}"));
-        if !Confirm::new(&format!("Resume {} from {from}, up to gen {until}?", run.name)).with_default(true).prompt()? {
+        let on = tracks.as_ref().map_or_else(String::new, |t| format!(" on {} per generation", t.summary()));
+        if !Confirm::new(&format!("Resume {} from {from}, up to gen {until}{on}?", run.name)).with_default(true).prompt()? {
             return Err(Exit::Back);
         }
-        let args = vec!["--name".to_string(), run.name.clone(), "--resume".into(), "--generations".into(), until.to_string()];
+        let mut args = vec!["--name".to_string(), run.name.clone(), "--resume".into(), "--generations".into(), until.to_string()];
+        args.extend(tracks.map(|t| t.args()).unwrap_or_default());
         self.children.trainer(&run.name, &args)?;
         Ok(format!("resumed {} (log: runs/{}/train.log)", run.name, run.name))
     }
@@ -283,7 +315,7 @@ impl App {
 
 /// Which runs train on a track, or whether it's a test track.
 fn track_note(track: &SavedTrack, runs: &[Run]) -> String {
-    let users: Vec<&str> = runs.iter().filter(|r| r.fixed.contains(&track.path)).map(|r| r.name.as_str()).collect();
+    let users: Vec<&str> = runs.iter().filter(|r| r.tracks.uses(&track.path)).map(|r| r.name.as_str()).collect();
     match (track.test, users.is_empty()) {
         (false, _) => "not a course".into(),
         (true, true) => "test track".into(),

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::paths;
+use crate::tracks::TrackChoice;
 
 pub struct Run {
     pub name: String,
@@ -16,8 +17,8 @@ pub struct Run {
     pub best: Option<f64>,
     /// Generation the run trains up to (its saved training.toml).
     pub target: Option<u32>,
-    pub fixed: Vec<String>,
-    pub per_generation: Option<u32>,
+    /// What it trains on (its saved training.toml).
+    pub tracks: TrackChoice,
     pub last_checkpoint: Option<u32>,
     /// Trainer process working on this run, if any.
     pub pid: Option<u32>,
@@ -35,15 +36,6 @@ impl Run {
 
     pub fn log(&self) -> PathBuf {
         self.dir.join("train.log")
-    }
-
-    /// "generated_1 + 3 generated", "3 generated", ...
-    pub fn tracks(&self) -> String {
-        let mut parts: Vec<String> = self.fixed.iter().map(|f| crate::tracks::stem(f)).collect();
-        if let Some(n) = self.per_generation.filter(|&n| n > 0) {
-            parts.push(format!("{n} generated"));
-        }
-        if parts.is_empty() { "?".into() } else { parts.join(" + ") }
     }
 
     pub fn status(&self) -> &'static str {
@@ -74,7 +66,7 @@ impl fmt::Display for Run {
             generation,
             self.stage.as_deref().unwrap_or(""),
             best,
-            self.tracks()
+            self.tracks.summary()
         )
     }
 }
@@ -111,12 +103,7 @@ fn load(dir: &Path, trainers: &[(u32, String)]) -> Run {
         stage,
         best,
         target: config.get("generations").and_then(|g| g.as_integer()).map(|g| g as u32),
-        fixed: tracks
-            .and_then(|t| t.get("fixed"))
-            .and_then(|f| f.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default(),
-        per_generation: tracks.and_then(|t| t.get("per_generation")).and_then(|n| n.as_integer()).map(|n| n as u32),
+        tracks: TrackChoice::from_table(tracks),
         last_checkpoint: last_checkpoint(dir),
         pid: trainers.iter().find(|(_, run)| *run == name).map(|(pid, _)| *pid),
         modified,

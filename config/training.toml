@@ -58,6 +58,8 @@ clutch_grace_secs = 0.4   # a clutch press shorter than this is a kick; longer i
 [tracks]
 per_generation = 3        # fresh generated tracks every generation (config/generator.toml)
 fixed = ["tracks/generated_1.toml"]              # saved tracks driven every generation too, e.g. ["tracks/generated_1.toml"]; left out of the test set
+pool = []                 # saved tracks to draw from, e.g. ["tracks/generated_9.toml", ...]; left out of the test set
+pool_per_generation = 0   # pool tracks drawn each generation (also feeds the [best] check tracks)
 test_every = 10           # best genome vs the library tracks (tracks/*.toml) every N gens; 0 = never
 
 [checkpoints]
@@ -65,7 +67,8 @@ every = 10                # full population saved every N generations
 
 # Which driver gets saved as best.genome (and judges curriculum advance and
 # the test runs): the top `candidates` by fitness also drive `tracks` extra
-# generated tracks, and the best over all its runs wins, so a lucky draw
+# tracks (pool tracks it didn't drive this generation first, then generated
+# ones), and the best over all its runs wins, so a lucky draw
 # doesn't replace a steadier driver. 0 = just the generation's fittest.
 [best]
 candidates = 5

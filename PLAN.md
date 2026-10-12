@@ -36,7 +36,9 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - Done: run dashboard in the viewer (`C` / `--charts`): fitness, drift quality, angle, pedals, diversity, end reasons, from `metrics.csv`.
 - Done: library panel (`O` / `--library`): every track in `tracks/`, click to drive, toggle the test set, rename, delete (moved to `tracks/deleted/`). `L` cycles the library.
 - Done: polish phase (`polish` on a stage) and a sturdier best.genome (`[best]`: top 5 re-run on 6 extra tracks).
-- Next: M3's features are in; what's left is user-led training to get cars drifting through drive -> slide -> judged (and, once judged works, polishing).
+- Done: track pool (`tracks.pool` + `pool_per_generation`): each generation draws a few saved tracks; the `[best]` check runs take pool tracks first. Set in `cargo drift`: when starting a run, or on resume ("Change its tracks?", saved into the run's config).
+- Next: rest of the track manager (see *Tracks › Track manager*): `tracks.csv` per-track results, then the viewer screen.
+- Then: M3's features are in; what's left is user-led training to get cars drifting through drive -> slide -> judged (and, once judged works, polishing).
 
 **In progress: M4** (network view and run dashboard already done)
 - Done: replays (see *Replays*): the trainer records the saved best every `replays.every` gens; the viewer plays them back (`--replays <run>`), and `X` saves the last AI run.
@@ -57,7 +59,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `cargo test -p sim --test physics -- --nocapture --test-threads=1`: physics numbers
 - `cargo run -p viewer -- --screenshot out.png --frames 420 --autopilot`: render a scripted lap to PNG (dev check for visuals)
 - `cargo run -p viewer -- --seed 7 --map`: open generated track 7 in map view
-- `cargo run --release -p train -- --name <run> [--generations N] [--stage N] [--track path]... [--generated N] [--resume]`: train
+- `cargo run --release -p train -- --name <run> [--generations N] [--stage N] [--track path]... [--pool path]... [--pooled N] [--generated N] [--resume]`: train
 - `cargo run -p viewer -- --genome runs/<run>/best.genome`: watch a trained driver
 - `cargo run -p viewer -- --follow <run>`: watch a run live (picks up each new best between runs)
 - `--track tracks/<file>.toml` on any viewer command: drive/watch on that saved track instead of `test_loop`
@@ -155,6 +157,30 @@ Good driving and drift physics is what gives this project value. The GA will als
 - **Track library:** about 15 approved tracks, saved to disk. A good generated track can be approved into the library (`K`). Library tracks are never trained on; those with `test` on (the default) form the **test set** the trainer measures generalisation on.
 - **Bezier editor:** later, not v1.
 
+### Track manager (in progress: pool mode done)
+
+Why: run6 sat at ~730 m for 280 gens with the gate value swinging ±80 m, mostly from which random generated tracks it drew (full-time runs ranged 387–1195 m). 9 of the saved driver's 10 runs per generation were fresh generated tracks nobody chose, and picking saved tracks in the launcher is a bare name list.
+
+- **Where:** a full screen in the viewer (`--tracks`, and a key from play mode); the launcher's Tracks menu opens it. It supersedes the library panel (`O`).
+- **Layout:** a grid of track cards (map outline, name, length, corners, role chips) and a detail pane for the selected card (bigger map, stats, results, actions).
+- **Stats** from the corner analysis: length, corners per km, sharpest corner, hairpins, figure-8 crossings, hard-edge share.
+- **Tabs:**
+  - **Library:** every `tracks/*.toml`. Drive, rename, delete, toggle test, set its role in the training set being edited.
+  - **Generate:** a batch of generated tracks from `config/generator.toml`; reroll, filter by length/corners, keep the good ones into the library.
+  - **Results:** a run's per-track results (below); its worst generated tracks can be kept into the library from here.
+- **Training set being edited**, picked at the top: *Defaults* (`config/training.toml`, for new runs) or a run (`runs/<run>/config/training.toml`, takes effect on `--resume`; warns if its trainer is running). Edits change only the `[tracks]` lines.
+- **Roles** a library track can have in a training set:
+  - **fixed:** driven every generation (as now).
+  - **pool:** new. Each generation draws `pool_per_generation` of the pool, deterministic from (seed, generation), without repeats.
+  - **off.**
+  - Fresh generated tracks stay as `per_generation`. A run's test set stays "test-flagged library tracks it doesn't train on", so pool tracks leave it too.
+- **Per-track results:** the trainer appends the saved driver's runs to `runs/<run>/tracks.csv` each generation: generation, track (library file or `gen:<seed>`), role (fixed / pool / generated / check / test), length, progress, laps, time, end. The screen shows per track: runs, mean progress and laps, early-end share and the most common end.
+- **Decided:**
+  - The `[best]` check tracks take pool tracks not drawn this generation first, then generated ones (one shuffle per generation, so they never overlap).
+  - Generated tracks kept from Results are rebuilt from seed + the run's snapshot `generator.toml`; the trainer doesn't save every generated track.
+  - A track can't be both fixed and pool (the trainer refuses).
+- **Build order:** pool mode (done) → `tracks.csv` → screen with Library tab + training-set editing → Generate tab → Results tab.
+
 ## Scoring
 
 All numbers live in `config/scoring.toml` (hot-reloaded).
@@ -223,7 +249,7 @@ Outputs are produced once per decision and held until the next one.
 
 - **Genome:** the network's weights as a flat list.
 - **Generation loop:**
-  1. Evaluate every genome on the same K tracks: fresh procedural tracks each generation (`tracks.per_generation`), plus any saved tracks listed in `tracks.fixed`. Fixed tracks are left out of the test set.
+  1. Evaluate every genome on the same K tracks: fresh procedural tracks each generation (`tracks.per_generation`), plus any saved tracks listed in `tracks.fixed`, plus `tracks.pool_per_generation` drawn from `tracks.pool`. Fixed and pool tracks are left out of the test set.
   2. Aggregate fitness across the tracks.
   3. Elites survive unchanged.
   4. The rest are bred via tournament selection, crossover and mutation.
@@ -238,7 +264,7 @@ Outputs are produced once per decision and held until the next one.
 - **Early termination:** a crash, spin, or no progress for a few seconds ends the episode.
 - **Diversity:** small tournaments, a few random immigrants per generation; diversity is tracked in behaviour space (lap share, drift share, angle, handbrake, clutch) as well as weight space.
 - **Polish phase:** an optional `polish` block on a curriculum stage: smaller σ (reset on entry, no reseed), no immigrants, more generated tracks per generation. Every genome, elites included, is already re-evaluated on fresh tracks each generation.
-- **Saved best (`[best]`):** the top few genomes by fitness also drive some extra generated tracks; the best over all its runs is saved as best.genome, judges curriculum advance and runs the test set, so a lucky draw can't replace a steadier driver.
+- **Saved best (`[best]`):** the top few genomes by fitness also drive some extra tracks (pool tracks not drawn this generation, then generated); the best over all its runs is saved as best.genome, judges curriculum advance and runs the test set, so a lucky draw can't replace a steadier driver.
 - **Monitoring:** see *Network view & metrics*.
 
 ## Replays

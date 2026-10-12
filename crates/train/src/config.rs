@@ -54,11 +54,31 @@ pub struct TrackConfig {
     /// the generated ones. They're left out of the test set.
     #[serde(default)]
     pub fixed: Vec<String>,
+    /// Saved tracks to draw from: each generation drives `pool_per_generation`
+    /// of them, picked from (seed, generation). Left out of the test set,
+    /// and the `[best]` check tracks come from here too.
+    #[serde(default)]
+    pub pool: Vec<String>,
+    #[serde(default)]
+    pub pool_per_generation: u32,
     pub test_every: u32,
 }
 
+impl TrackConfig {
+    /// How many pool tracks a generation draws (no more than the pool has).
+    pub fn pool_draw(&self) -> usize {
+        (self.pool_per_generation as usize).min(self.pool.len())
+    }
+
+    /// Every saved track trained on, fixed or pooled.
+    pub fn trained_on(&self) -> impl Iterator<Item = &String> {
+        self.fixed.iter().chain(&self.pool)
+    }
+}
+
 /// Before saving best.genome, the top `candidates` genomes by fitness drive
-/// `tracks` extra generated tracks, and the best over all its runs is saved.
+/// `tracks` extra tracks (pool tracks not driven this generation, then
+/// generated ones), and the best over all its runs is saved.
 /// A genome that topped the generation on a lucky draw doesn't replace a
 /// steadier one. 0 (either) = just save the generation's fittest.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

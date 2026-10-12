@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use agent::NnDriver;
+use common::Rng;
 use evo::Island;
 use nn::{Network, NetworkSpec};
 use rayon::prelude::*;
@@ -14,6 +15,9 @@ use sim::recording::Recording;
 use sim::scoring::ScoringParams;
 use sim::track::Track;
 use sim::track::generator::{self, GeneratorParams};
+
+/// Rng stream for the pool order, apart from everything else per generation.
+const POOL_STREAM: u64 = 0x9001;
 
 /// Everything a run needs besides the network.
 #[derive(Clone)]
@@ -47,6 +51,17 @@ pub fn generation_tracks(params: &GeneratorParams, run_seed: u64, generation: u3
         assert!(candidate < 1000, "the track generator keeps failing; check config/generator.toml");
     }
     tracks
+}
+
+/// The pool in a fresh order for a generation (Fisher-Yates): training
+/// drives the first few, the `[best]` check runs take from the rest.
+pub fn pool_order(run_seed: u64, generation: u32, len: usize) -> Vec<usize> {
+    let mut rng = Rng::with_stream(mix(run_seed, u64::from(generation)), POOL_STREAM);
+    let mut order: Vec<usize> = (0..len).collect();
+    for i in (1..len).rev() {
+        order.swap(i, rng.below(i as u32 + 1) as usize);
+    }
+    order
 }
 
 /// Episode seeds for a generation: one per track, shared by every genome so
@@ -121,4 +136,20 @@ pub fn evaluate(islands: &[Island], tracks: &[Arc<Track>], seeds: &[u64], env: &
         .collect();
     let mut flat = flat.into_iter();
     islands.iter().map(|island| flat.by_ref().take(island.genomes.len()).collect()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pool_order_is_a_fixed_shuffle_per_generation() {
+        let order = pool_order(1, 7, 10);
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..10).collect::<Vec<_>>());
+        assert_eq!(order, pool_order(1, 7, 10));
+        assert_ne!(order, pool_order(1, 8, 10));
+        assert!(pool_order(1, 7, 0).is_empty());
+    }
 }

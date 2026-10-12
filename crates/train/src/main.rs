@@ -1,10 +1,12 @@
 //! Headless trainer: evolves driver networks.
 //!
 //! `cargo run --release -p train -- --name <run> [--generations N]
-//! [--config path] [--stage N] [--seed N] [[--track path]... | --no-fixed] [--generated N] [--resume]`
+//! [--config path] [--stage N] [--seed N] [[--track path]... | --no-fixed]
+//! [[--pool path]... | --no-pool] [--pooled N] [--generated N] [--resume]`
 //!
-//! `--track` (repeatable) / `--no-fixed` and `--generated` override
-//! `tracks.fixed` and `tracks.per_generation`.
+//! `--track` (repeatable) / `--no-fixed`, `--pool` (repeatable) / `--no-pool`,
+//! `--pooled` and `--generated` override `tracks.fixed`, `tracks.pool`,
+//! `tracks.pool_per_generation` and `tracks.per_generation`.
 //!
 //! Writes everything to `runs/<name>/`: metrics.csv, best.genome (the best
 //! driver so far each generation), checkpoints/ (whole population every few
@@ -48,13 +50,25 @@ struct Args {
     stage: Option<usize>,
     seed: Option<u64>,
     tracks: Option<Vec<String>>,
+    pool: Option<Vec<String>>,
+    pooled: Option<u32>,
     generated: Option<u32>,
     resume: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
-    let mut args =
-        Args { name: String::new(), generations: None, config: None, stage: None, seed: None, tracks: None, generated: None, resume: false };
+    let mut args = Args {
+        name: String::new(),
+        generations: None,
+        config: None,
+        stage: None,
+        seed: None,
+        tracks: None,
+        pool: None,
+        pooled: None,
+        generated: None,
+        resume: false,
+    };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         let mut value = |flag: &str| it.next().ok_or_else(|| format!("{flag} needs a value"));
@@ -66,13 +80,16 @@ fn parse_args() -> Result<Args, String> {
             "--seed" => args.seed = Some(value("--seed")?.parse().map_err(|_| "bad --seed")?),
             "--track" => args.tracks.get_or_insert_default().push(value("--track")?),
             "--no-fixed" => args.tracks = Some(vec![]),
+            "--pool" => args.pool.get_or_insert_default().push(value("--pool")?),
+            "--no-pool" => args.pool = Some(vec![]),
+            "--pooled" => args.pooled = Some(value("--pooled")?.parse().map_err(|_| "bad --pooled")?),
             "--generated" => args.generated = Some(value("--generated")?.parse().map_err(|_| "bad --generated")?),
             "--resume" => args.resume = true,
             other => return Err(format!("unknown argument {other}")),
         }
     }
     if args.name.is_empty() {
-        return Err("usage: train --name <run> [--generations N] [--config path] [--stage N] [--seed N] [[--track path]... | --no-fixed] [--generated N] [--resume]".into());
+        return Err("usage: train --name <run> [--generations N] [--config path] [--stage N] [--seed N] [[--track path]... | --no-fixed] [[--pool path]... | --no-pool] [--pooled N] [--generated N] [--resume]".into());
     }
     Ok(args)
 }
@@ -97,12 +114,12 @@ fn load_track(relative: &str) -> Result<Arc<Track>, String> {
 }
 
 /// The held-out test set: library tracks (tracks/*.toml) not marked
-/// `test = false` and not trained on as fixed tracks.
-fn library_tracks(fixed: &[String]) -> Vec<Arc<Track>> {
+/// `test = false` and not trained on (fixed or pool).
+fn library_tracks<'a>(trained_on: impl Iterator<Item = &'a String>) -> Vec<Arc<Track>> {
     let Ok(entries) = std::fs::read_dir(workspace_path("tracks")) else { return vec![] };
-    let fixed: Vec<PathBuf> = fixed.iter().filter_map(|f| workspace_path(f).canonicalize().ok()).collect();
+    let trained_on: Vec<PathBuf> = trained_on.filter_map(|f| workspace_path(f).canonicalize().ok()).collect();
     let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "toml")).collect();
-    paths.retain(|p| p.canonicalize().map_or(true, |p| !fixed.contains(&p)));
+    paths.retain(|p| p.canonicalize().map_or(true, |p| !trained_on.contains(&p)));
     paths.sort();
     paths
         .iter()
@@ -196,13 +213,16 @@ fn save_top(
 }
 
 /// Pick the driver to save as best.genome. Without `[best]`, the fittest.
-/// With it, the top few by fitness also drive some extra tracks, and the
+/// With it, the top few by fitness also drive some extra tracks (`spare`:
+/// pool tracks not driven this generation, then generated ones), and the
 /// best over all its runs wins.
+#[allow(clippy::too_many_arguments)]
 fn pick_saved(
     islands: &[Island],
     results: &[Vec<Vec<EpisodeResult>>],
     cfg: &TrainingConfig,
     generator: &GeneratorParams,
+    spare: &[Arc<Track>],
     generation: u32,
     stage: &Stage,
     env: &Env,
@@ -218,7 +238,9 @@ fn pick_saved(
 
     let chosen = &ranked[..cfg.best.candidates.min(ranked.len())];
     let check_seed = runner::mix(cfg.seed, CHECK_STREAM);
-    let tracks = runner::generation_tracks(generator, check_seed, generation, cfg.best.tracks);
+    let mut tracks: Vec<Arc<Track>> = spare.iter().take(cfg.best.tracks as usize).cloned().collect();
+    let generated = cfg.best.tracks - tracks.len() as u32;
+    tracks.extend(runner::generation_tracks(generator, check_seed, generation, generated));
     let seeds = runner::episode_seeds(check_seed, generation, tracks.len());
     let checks = evaluate_some(islands, chosen, &tracks, &seeds, env);
     chosen
@@ -269,8 +291,17 @@ fn run(args: Args) -> Result<(), String> {
     if let Some(tracks) = &args.tracks {
         cfg.tracks.fixed = tracks.clone();
     }
+    if let Some(pool) = &args.pool {
+        cfg.tracks.pool = pool.clone();
+    }
+    if let Some(pooled) = args.pooled {
+        cfg.tracks.pool_per_generation = pooled;
+    }
     if let Some(generated) = args.generated {
         cfg.tracks.per_generation = generated;
+    }
+    if let Some(both) = cfg.tracks.pool.iter().find(|p| cfg.tracks.fixed.contains(p)) {
+        return Err(format!("{both} is in both tracks.fixed and tracks.pool: pick one"));
     }
     let (car, scoring, generator): (CarParams, ScoringParams, GeneratorParams) = if args.resume {
         let saved = |name: &str| run_dir.join("config").join(name);
@@ -294,10 +325,14 @@ fn run(args: Args) -> Result<(), String> {
 
     let env = Env { car, scoring, episode: cfg.episode.clone() };
     let fixed_tracks = cfg.tracks.fixed.iter().map(|f| load_track(f)).collect::<Result<Vec<_>, _>>()?;
-    if fixed_tracks.is_empty() && cfg.tracks.per_generation == 0 {
-        return Err("no training tracks: set tracks.per_generation or tracks.fixed".into());
+    let pool_tracks = cfg.tracks.pool.iter().map(|f| load_track(f)).collect::<Result<Vec<_>, _>>()?;
+    if fixed_tracks.is_empty() && cfg.tracks.pool_draw() == 0 && cfg.tracks.per_generation == 0 {
+        return Err("no training tracks: set tracks.per_generation, tracks.fixed or tracks.pool + pool_per_generation".into());
     }
-    let test_tracks = library_tracks(&cfg.tracks.fixed);
+    if !pool_tracks.is_empty() && cfg.tracks.pool_draw() == 0 {
+        eprintln!("warning: tracks.pool has {} tracks but pool_per_generation is 0, so only the [best] check runs use it", pool_tracks.len());
+    }
+    let test_tracks = library_tracks(cfg.tracks.trained_on());
 
     // Start fresh or carry on from the latest checkpoint.
     let mut pop = match checkpoint::latest(&run_dir).filter(|_| args.resume) {
@@ -338,13 +373,15 @@ fn run(args: Args) -> Result<(), String> {
 
     let shapes: Vec<String> = pop.islands.iter().map(|i| i.spec.describe()).collect();
     println!(
-        "run '{}': {} islands x {} [{}], {} generated tracks/gen, fixed tracks: [{}], test tracks: {} ({}), best.genome check: {}, {} threads",
+        "run '{}': {} islands x {} [{}], {} generated tracks/gen, fixed tracks: [{}], pool: {} of [{}] per gen, test tracks: {} ({}), best.genome check: {}, {} threads",
         args.name,
         pop.islands.len(),
         cfg.ga.population,
         shapes.join(", "),
         curriculum.stage().tracks_per_generation(cfg.tracks.per_generation),
         fixed_tracks.iter().map(|t| t.def.name.as_str()).collect::<Vec<_>>().join(", "),
+        cfg.tracks.pool_draw(),
+        pool_tracks.iter().map(|t| t.def.name.as_str()).collect::<Vec<_>>().join(", "),
         test_tracks.len(),
         test_tracks.iter().map(|t| t.def.name.as_str()).collect::<Vec<_>>().join(", "),
         if cfg.best.enabled() {
@@ -361,7 +398,11 @@ fn run(args: Args) -> Result<(), String> {
         let stage = curriculum.stage().clone();
         // A polish stage has its own (finer) GA settings and track count.
         let ga = stage.ga(&cfg.ga);
+        let pool_order: Vec<Arc<Track>> =
+            runner::pool_order(cfg.seed, generation, pool_tracks.len()).into_iter().map(|k| pool_tracks[k].clone()).collect();
+        let (pooled, spare) = pool_order.split_at(cfg.tracks.pool_draw());
         let mut tracks = fixed_tracks.clone();
+        tracks.extend_from_slice(pooled);
         tracks.extend(runner::generation_tracks(&generator, cfg.seed, generation, stage.tracks_per_generation(cfg.tracks.per_generation)));
         let seeds = runner::episode_seeds(cfg.seed, generation, tracks.len());
         // Shaping stages run on softer rules; the final stage on the real ones.
@@ -373,7 +414,7 @@ fn run(args: Args) -> Result<(), String> {
             island.fitness = island_results.iter().map(|runs| stage.fitness(runs)).collect();
             island.objectives = island_results.iter().map(|runs| stage.objectives(runs)).collect();
         }
-        let saved = pick_saved(&pop.islands, &results, &cfg, &generator, generation, &stage, &stage_env)?;
+        let saved = pick_saved(&pop.islands, &results, &cfg, &generator, spare, generation, &stage, &stage_env)?;
         let best_island = &pop.islands[saved.island];
         let best_genome = &best_island.genomes[saved.genome];
 
