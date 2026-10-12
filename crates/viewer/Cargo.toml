@@ -1,0 +1,15 @@
+[package]
+name = "viewer"
+description = "The visual app: driving, watching, replays, review, debug overlays"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+common.workspace = true
+sim.workspace = true
+macroquad.workspace = true
+gilrs.workspace = true
+
+[lints]
+workspace = true
