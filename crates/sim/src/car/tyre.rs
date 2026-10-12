@@ -34,7 +34,8 @@ pub struct TyreOutput {
 /// - `velocity`: contact patch velocity over the ground, wheel frame.
 /// - `surface_speed`: wheel spin times radius (positive = rolling forward).
 /// - `load`: normal load in N.
-pub fn evaluate(p: &TyreParams, velocity: Vec2, surface_speed: f64, load: f64) -> TyreOutput {
+/// - `grip`: surface grip multiplier (1 = asphalt).
+pub fn evaluate(p: &TyreParams, velocity: Vec2, surface_speed: f64, load: f64, grip: f64) -> TyreOutput {
     let slip_velocity = Vec2::new(surface_speed - velocity.x, -velocity.y);
     let reference = velocity.length().max(surface_speed.abs()).max(p.min_speed);
     let slip = slip_velocity / reference;
@@ -59,7 +60,7 @@ pub fn evaluate(p: &TyreParams, velocity: Vec2, surface_speed: f64, load: f64) -
     let sliding_dir = slip.normalize_or_zero();
     let direction = elastic_dir.lerp(sliding_dir, smoothstep(1.0, 2.5, s)).normalize_or_zero();
 
-    out.force = direction * (friction_coefficient(p, load) * load * grip_curve(p, s));
+    out.force = direction * (grip * friction_coefficient(p, load) * load * grip_curve(p, s));
     out
 }
 
@@ -83,9 +84,16 @@ pub fn grip_curve(p: &TyreParams, s: f64) -> f64 {
 
 /// d(longitudinal force) / d(surface speed), never negative. Used to integrate
 /// wheel spin implicitly, which keeps the stiff wheel/tyre coupling stable.
-pub fn longitudinal_stiffness(p: &TyreParams, velocity: Vec2, surface_speed: f64, load: f64, base_fx: f64) -> f64 {
+pub fn longitudinal_stiffness(
+    p: &TyreParams,
+    velocity: Vec2,
+    surface_speed: f64,
+    load: f64,
+    grip: f64,
+    base_fx: f64,
+) -> f64 {
     const DELTA: f64 = 0.01;
-    let nudged = evaluate(p, velocity, surface_speed + DELTA, load).force.x;
+    let nudged = evaluate(p, velocity, surface_speed + DELTA, load, grip).force.x;
     ((nudged - base_fx) / DELTA).max(0.0)
 }
 
@@ -101,7 +109,7 @@ mod tests {
     #[test]
     fn free_rolling_straight_has_no_force() {
         let p = tyre();
-        let out = evaluate(&p, Vec2::new(20.0, 0.0), 20.0, 3000.0);
+        let out = evaluate(&p, Vec2::new(20.0, 0.0), 20.0, 3000.0, 1.0);
         assert!(out.force.length() < 1e-9);
     }
 
@@ -117,7 +125,7 @@ mod tests {
     #[test]
     fn force_opposes_sideways_sliding() {
         let p = tyre();
-        let out = evaluate(&p, Vec2::new(0.0, 10.0), 0.0, 3000.0);
+        let out = evaluate(&p, Vec2::new(0.0, 10.0), 0.0, 3000.0, 1.0);
         assert!(out.force.y < 0.0);
         assert!(out.force.x.abs() < 1e-6);
         let sliding = friction_coefficient(&p, 3000.0) * 3000.0 * p.slide_ratio;
@@ -127,9 +135,9 @@ mod tests {
     #[test]
     fn wheelspin_pushes_forward_and_lockup_pulls_back() {
         let p = tyre();
-        let spin = evaluate(&p, Vec2::new(10.0, 0.0), 12.0, 3000.0);
+        let spin = evaluate(&p, Vec2::new(10.0, 0.0), 12.0, 3000.0, 1.0);
         assert!(spin.force.x > 0.0 && spin.slip_ratio > 0.0);
-        let locked = evaluate(&p, Vec2::new(10.0, 0.0), 0.0, 3000.0);
+        let locked = evaluate(&p, Vec2::new(10.0, 0.0), 0.0, 3000.0, 1.0);
         assert!(locked.force.x < 0.0);
         assert!((locked.slip_ratio + 1.0).abs() < 1e-9);
     }
@@ -140,7 +148,7 @@ mod tests {
         for vx in [-10.0, 0.0, 0.5, 5.0, 30.0] {
             for vy in [-10.0, -1.0, 0.0, 2.0, 15.0] {
                 for surface in [-5.0, 0.0, 5.0, 40.0] {
-                    let out = evaluate(&p, Vec2::new(vx, vy), surface, 3000.0);
+                    let out = evaluate(&p, Vec2::new(vx, vy), surface, 3000.0, 1.0);
                     let max = friction_coefficient(&p, 3000.0) * 3000.0;
                     assert!(out.force.length() <= max * (1.0 + 1e-9));
                 }

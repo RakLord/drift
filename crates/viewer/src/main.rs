@@ -1,8 +1,9 @@
-//! The visual app. For now: drive the car on an open lot with telemetry.
+//! The visual app. For now: drive the car around a track with telemetry.
 
 mod app;
 mod debug;
 mod input;
+mod paths;
 mod render;
 mod screens;
 

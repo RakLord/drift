@@ -11,10 +11,16 @@ const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
 }
 
 pub const ASPHALT: Color = rgb(38, 40, 48);
+pub const GROUND: Color = rgb(16, 18, 20);
+pub const GRASS: Color = rgb(24, 36, 28);
+pub const EDGE_PAINT: Color = rgb(214, 212, 200);
+pub const CONCRETE: Color = rgb(128, 130, 136);
+pub const CONCRETE_DARK: Color = rgb(104, 106, 112);
+pub const FENCE: Color = rgb(88, 94, 104);
+pub const SPARK: Color = rgb(255, 196, 90);
+pub const CRASH_BAR: Color = rgb(70, 72, 78);
 pub const GRID_MINOR: Color = rgb(45, 48, 57);
 pub const GRID_MAJOR: Color = rgb(56, 60, 72);
-pub const PAINT: Color = rgba(216, 210, 184, 150);
-pub const CONE: Color = rgb(255, 122, 26);
 
 pub const CAR_BODY: Color = rgb(232, 232, 240);
 pub const CAR_ROOF: Color = rgb(205, 205, 215);

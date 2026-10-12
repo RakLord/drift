@@ -9,7 +9,9 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `sim/car`: full car physics driven by `config/car.toml`, plus 12 behaviour tests (`sim/tests/physics.rs`)
 - `viewer`: free-drive screen with gamepad/keyboard, telemetry, smoke, skid marks, live car.toml reload
 
-**Next: M1**, starting with Bezier tracks + walls + collisions, then the generator, zones, scoring, driver prep, game HUD.
+**In progress: M1**
+- Done: Bezier tracks (`sim/track`, `tracks/test_loop.toml`), hard/soft edges, verge grip, wall collisions (`sim/world`), track rendering, sparks, cosmetic bumper damage. Track files hot-reload in the viewer.
+- Next: procedural generator, zones, scoring, driver prep, game HUD.
 
 **Conventions**
 - The sim uses `f64` (SI units). The NN will use `f32`.
@@ -32,7 +34,8 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 ## Base concepts
 
 - **Game:** drift a car around a judged course. Points only while drifting. Scoring follows Formula Drift judging: **Line** (clip points / zones), **Angle**, **Style**, with speed as a multiplier.
-- **Combo:** points build up during a drift and are banked only on a clean exit. Spin-outs and wall hits lose the combo and add a penalty.
+- **Combo:** points build up during a drift and are banked only on a clean exit. Spin-outs and hard wall hits lose the combo and add a penalty.
+- **Wall taps:** a light, controlled rear-bumper tap on a hard wall (e.g. in an outer zone) earns a **Style bonus**. This is JDM drift.
 - **Driver prep:** before a run, the track is analysed into a list of corners. While driving, the car "knows" the next few corners before it can see them, so it can pre-plan entries.
 - **Agent:** a fixed-size neural net reads sensors (raycasts, car state, driver prep) and outputs controls.
 - **Training:** a genetic algorithm evolves the network weights, guided by a shaped fitness function and periodic human review. There is no backprop in v1.
@@ -92,7 +95,15 @@ Good driving and drift physics is what gives this project value. The GA will als
 
 ## Tracks
 
-- **Format:** a closed loop of cubic Bezier segments with smooth (mirrored) handles, plus a width, generated into inner/outer wall polylines. A grid speeds up ray and collision queries.
+- **Format:** a closed loop of cubic Bezier segments with smooth (mirrored) handles, plus a width. It's built into a sampled centreline (distance along track, direction, curvature) and left/right edge polylines. A grid speeds up ray and collision queries.
+- **Edges:** each side of each section is **hard** or **soft**.
+  - **Hard:** a barrier (concrete or tyre wall) that you collide with.
+  - **Soft:** a grass/gravel verge (~6–10 m) with no collision; tyres get ~0.6× grip and more rolling resistance. A hard fence sits beyond the verge.
+  - The world looks up the surface under each tyre and passes per-wheel grip factors to the car, so the car never knows about tracks.
+- **Wall impacts:** rigid-body impulse at the contact point, with near-zero bounce and scraping friction capped by the impact.
+  - Overlap is fixed by correcting position (never adds energy).
+  - Light taps only nudge the car; hard hits spin it.
+  - Impacts emit contact events (point, normal, speed) for sparks, debris, and cosmetic bumper damage (bumpers rip off).
 - **Procedural generator (v1):**
   1. Place random control points around a loop.
   2. Derive smooth handles.
@@ -114,20 +125,20 @@ Good driving and drift physics is what gives this project value. The GA will als
 
 ## Network
 
-**Shape:** varies per island (e.g. `102 → 32 → 32 → 5`, tanh hidden layers).
+**Shape:** varies per island (e.g. `110 → 32 → 32 → 5`, tanh hidden layers).
 
-### Inputs (102)
+### Inputs (110)
 
 All inputs are in the car's own frame (x forward, y left) and scaled to roughly -1..1 with fixed constants, using tanh for unbounded values. World position/heading, lap progress, and elapsed time are deliberately left out, so the network can't memorise a track.
 
 | Group | # | Inputs |
 |---|---|---|
-| Rays | 48 | 360°: 32 across the front 180°, 16 across the rear. Range 60 m. Value = `1 - dist/range`. Walls only |
+| Rays | 48 | 360°: 32 across the front 180°, 16 across the rear. Range 60 m. Value = `1 - dist/range`. Hit the track edge (hard or soft) |
 | Body dynamics | 8 | forward vel, sideways vel, speed, drift angle as sin + cos, yaw rate, forward + sideways g-force |
 | Wheels (×4) | 16 | per wheel: slip angle, slip ratio, grip usage (≥1 = sliding), load ÷ static load |
 | Car state | 6 | applied steer, throttle, brake, handbrake, clutch; engine RPM |
-| Track position | 4 | heading vs track direction as sin + cos, offset from centreline (-1..1), signed curvature here |
-| Driver prep (×3 corners) | 18 | per corner: distance to entry, progress through it, signed total angle, sharpness, clip point position (-1 = none), outer zone coverage |
+| Track position | 6 | heading vs track direction as sin + cos, offset from centreline (-1..1), signed curvature here, left/right edge hard (0/1) |
+| Driver prep (×3 corners) | 24 | per corner: distance to entry, progress through it, signed total angle, sharpness, clip point position (-1 = none), outer zone coverage, inside edge hard, outside edge hard |
 | Drift state | 2 | drifting (0/1), in a zone (0/1) |
 
 **Sensor noise:** small Gaussian noise on inputs during training, for robustness. It's seeded per episode, so replays still match exactly. It can be turned off for test-track evaluation.

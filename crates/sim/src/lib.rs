@@ -5,8 +5,11 @@
 
 pub mod car;
 pub mod controls;
+pub mod track;
+pub mod world;
 
 pub use car::Car;
 pub use controls::Controls;
+pub use world::World;
 
 pub const GRAVITY: f64 = 9.81;

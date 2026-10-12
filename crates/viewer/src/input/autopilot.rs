@@ -1,10 +1,11 @@
-//! Dev tool: a scripted driver that kicks into a left-hand drift and holds it,
-//! the same way the physics tests do. Handy for checking visuals without a pad.
+//! Dev tool: a scripted driver for checking visuals without a pad. It follows
+//! the centreline at a steady speed, and every few seconds flicks the car
+//! sideways with the handbrake so there is smoke to look at.
 
-use sim::Controls;
-use sim::car::{CarParams, CarState};
+use sim::{Controls, World};
 
-const TARGET_ANGLE_DEG: f64 = -25.0;
+const TARGET_SPEED: f64 = 70.0 / 3.6;
+const LOOK_AHEAD: usize = 14;
 
 pub struct Autopilot {
     time: f64,
@@ -15,22 +16,21 @@ impl Autopilot {
         Self { time: 0.0 }
     }
 
-    pub fn controls(&mut self, state: &CarState, params: &CarParams, dt: f64) -> Controls {
+    pub fn controls(&mut self, world: &World, dt: f64) -> Controls {
         self.time += dt;
-        let t = self.time;
-        if t < 1.5 {
-            return Controls { throttle: 1.0, ..Default::default() };
-        }
-        if t < 2.0 {
-            return Controls { steer: 0.4, throttle: 1.0, clutch: if t < 1.8 { 1.0 } else { 0.0 }, ..Default::default() };
-        }
-        let beta = state.body_slip_angle();
-        let target = TARGET_ANGLE_DEG.to_radians();
-        let steer = beta + (beta - target) - 0.1 * state.yaw_rate;
+        let track = &world.track;
+        let s = &world.car.state;
+        let target = track.samples[(world.place.index + LOOK_AHEAD) % track.samples.len()].position;
+        let local = (target - s.position).to_local(s.heading);
+        let steer = (local.y.atan2(local.x) / world.car.params.steering.max_lock()).clamp(-1.0, 1.0);
+        let speed_error = TARGET_SPEED - s.speed();
+        let flick = self.time % 6.0 > 5.4;
         Controls {
-            steer: steer / params.steering.max_lock(),
-            throttle: (0.6 + (beta - target)).clamp(0.0, 1.0),
-            ..Default::default()
+            steer,
+            throttle: (speed_error * 0.3).clamp(0.0, 1.0),
+            brake: (-speed_error * 0.1).clamp(0.0, 1.0),
+            handbrake: if flick { 1.0 } else { 0.0 },
+            clutch: if flick { 1.0 } else { 0.0 },
         }
     }
 }

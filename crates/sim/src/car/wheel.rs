@@ -1,7 +1,6 @@
 //! Wheel indexing, contact patch kinematics, and wheel spin integration.
 
 use common::Vec2;
-use common::math::approach;
 
 pub const FL: usize = 0;
 pub const FR: usize = 1;
@@ -42,15 +41,22 @@ impl SpinStep {
     ///
     /// The tyre force is linearised around the current spin and solved
     /// implicitly: the wheel/tyre coupling is far too stiff for plain explicit
-    /// integration at low speed. Friction torque is then applied as a pull
-    /// towards zero spin, so a locked wheel stays locked rather than jittering.
+    /// integration at low speed. Friction torque (brakes, rolling resistance)
+    /// is Coulomb friction inside the same solve: if it is strong enough to
+    /// hold the wheel still this step, the wheel stops at exactly zero;
+    /// otherwise it opposes the direction the wheel ends up turning.
     pub fn solve(&self, dt: f64) -> f64 {
         // d(tyre torque)/d(omega) = radius^2 * d(force)/d(surface speed).
         let k = self.tyre_stiffness * self.radius * self.radius;
-        let free = (self.inertia * self.omega
-            + dt * (self.drive_torque - self.radius * self.tyre_force + k * self.omega))
-            / (self.inertia + dt * k);
-        approach(free, 0.0, self.friction_torque * dt / self.inertia)
+        // Net torque from drive and tyre, linearised: torque(w) = base - k * w.
+        let base = self.drive_torque - self.radius * self.tyre_force + k * self.omega;
+        // Friction torque needed to end this step at exactly zero spin.
+        let to_stop = self.inertia * self.omega / dt + base;
+        if to_stop.abs() <= self.friction_torque {
+            return 0.0;
+        }
+        let friction = self.friction_torque.copysign(to_stop);
+        (self.inertia * self.omega + dt * (base - friction)) / (self.inertia + dt * k)
     }
 }
 

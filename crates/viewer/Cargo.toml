@@ -10,6 +10,7 @@ common.workspace = true
 sim.workspace = true
 macroquad.workspace = true
 gilrs.workspace = true
+toml.workspace = true
 
 [lints]
 workspace = true

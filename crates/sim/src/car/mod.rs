@@ -6,6 +6,7 @@
 
 pub mod drivetrain;
 pub mod engine;
+pub mod ground;
 pub mod params;
 pub mod state;
 pub mod steering;
@@ -16,6 +17,7 @@ pub mod wheel;
 
 use common::Vec2;
 
+pub use ground::Ground;
 pub use params::CarParams;
 pub use state::{CarState, WheelState};
 
@@ -33,15 +35,20 @@ impl Car {
         Self { params, state }
     }
 
-    /// Advance by one sim tick of `dt` seconds, split into the configured
-    /// number of substeps.
+    /// Advance by one sim tick of `dt` seconds on asphalt.
     pub fn step(&mut self, controls: Controls, dt: f64) {
+        self.step_on(controls, &[Ground::ASPHALT; 4], dt);
+    }
+
+    /// Advance by one sim tick of `dt` seconds, split into the configured
+    /// number of substeps, with each wheel on the given ground.
+    pub fn step_on(&mut self, controls: Controls, ground: &[Ground; 4], dt: f64) {
         let controls = controls.clamped();
         self.state.controls = controls;
         let substeps = self.params.substeps.max(1);
         let h = dt / f64::from(substeps);
         for _ in 0..substeps {
-            step::substep(&self.params, &mut self.state, &controls, h);
+            step::substep(&self.params, &mut self.state, &controls, ground, h);
         }
     }
 }

@@ -1,7 +1,7 @@
 //! Driver HUD (screen space): speed, tach, drift angle, input bars.
 
 use macroquad::prelude::*;
-use sim::Controls;
+use sim::{Controls, World};
 use sim::car::{CarParams, CarState};
 
 use super::{text, theme};
@@ -21,6 +21,17 @@ pub fn draw(state: &CarState, params: &CarParams) {
 
     draw_tach(state, params, x, h - 66.0, 300.0);
     draw_inputs(&state.controls, screen_width() - 240.0, h - 160.0);
+}
+
+/// Track name and position along the lap, top centre.
+pub fn draw_track_info(world: &World) {
+    let track = &world.track;
+    let lap = (world.progress / track.length).floor().max(0.0) as u32 + 1;
+    let line = format!(
+        "{}   lap {lap}   {:.0} / {:.0} m",
+        track.def.name, world.place.distance, track.length
+    );
+    text(&line, screen_width() / 2.0 - 140.0, 20.0, 18.0, theme::TEXT_DIM);
 }
 
 fn draw_tach(state: &CarState, params: &CarParams, x: f32, y: f32, width: f32) {

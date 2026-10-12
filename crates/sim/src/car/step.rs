@@ -3,6 +3,7 @@
 use common::Vec2;
 
 use super::drivetrain::{self, AxleLoad};
+use super::ground::Ground;
 use super::params::CarParams;
 use super::state::CarState;
 use super::tyre::{self, TyreOutput};
@@ -10,7 +11,7 @@ use super::wheel::{self, FL, FR, RL, RR, SpinStep};
 use super::steering;
 use crate::Controls;
 
-pub fn substep(p: &CarParams, s: &mut CarState, controls: &Controls, dt: f64) {
+pub fn substep(p: &CarParams, s: &mut CarState, controls: &Controls, ground: &[Ground; 4], dt: f64) {
     s.steer_angle = steering::update(&p.steering, s.steer_angle, controls.steer, dt);
 
     let offsets = p.body.wheel_offsets();
@@ -24,12 +25,14 @@ pub fn substep(p: &CarParams, s: &mut CarState, controls: &Controls, dt: f64) {
 
     // Tyre forces at the current spin, and how they change with spin.
     let before: [TyreOutput; 4] =
-        std::array::from_fn(|i| tyre::evaluate(&p.tyre, patch_velocity[i], s.wheels[i].omega * radius, loads[i]));
+        std::array::from_fn(|i| {
+            tyre::evaluate(&p.tyre, patch_velocity[i], s.wheels[i].omega * radius, loads[i], ground[i].grip)
+        });
     let stiffness: [f64; 4] = std::array::from_fn(|i| {
         let surface = s.wheels[i].omega * radius;
-        tyre::longitudinal_stiffness(&p.tyre, patch_velocity[i], surface, loads[i], before[i].force.x)
+        tyre::longitudinal_stiffness(&p.tyre, patch_velocity[i], surface, loads[i], ground[i].grip, before[i].force.x)
     });
-    let rolling = |i: usize| p.tyre.rolling_resistance * loads[i] * radius;
+    let rolling = |i: usize| p.tyre.rolling_resistance * ground[i].rolling_resistance * loads[i] * radius;
 
     // Front wheels spin freely.
     for i in [FL, FR] {
@@ -63,7 +66,7 @@ pub fn substep(p: &CarParams, s: &mut CarState, controls: &Controls, dt: f64) {
     let mut force = Vec2::ZERO;
     let mut torque = 0.0;
     for i in 0..4 {
-        let out = tyre::evaluate(&p.tyre, patch_velocity[i], s.wheels[i].omega * radius, loads[i]);
+        let out = tyre::evaluate(&p.tyre, patch_velocity[i], s.wheels[i].omega * radius, loads[i], ground[i].grip);
         let car_force = out.force.rotate(steer_of(i));
         force += car_force;
         torque += offsets[i].cross(car_force);

@@ -1,16 +1,19 @@
-//! Free-drive screen: one car on the open lot, driven by you.
+//! Free-drive screen: one car on a track, driven by you.
 
-use std::path::PathBuf;
+use std::sync::Arc;
 
+use common::Vec2;
 use common::config::WatchedConfig;
 use common::math::{angle_diff, wrap_angle};
-use common::Vec2;
 use macroquad::prelude::*;
-use sim::car::{Car, CarParams, CarState};
+use sim::car::{CarParams, CarState};
+use sim::track::{Track, TrackDef};
+use sim::World;
 
 use crate::debug::{gamepad_panel, history::History, telemetry};
-use crate::input::{autopilot::Autopilot, Input};
-use crate::render::{self, camera::FollowCamera, effects::Effects, ground, hud, text, theme};
+use crate::input::{Input, autopilot::Autopilot};
+use crate::paths::workspace_file;
+use crate::render::{self, camera::FollowCamera, effects::Effects, ground, hud, text, theme, track::TrackMesh};
 
 const TICK: f64 = 1.0 / 120.0;
 /// Never simulate more than this many ticks per frame (avoids a death spiral
@@ -19,13 +22,16 @@ const MAX_TICKS_PER_FRAME: u32 = 12;
 const CONFIG_POLL_SECS: f64 = 0.5;
 const TIME_SCALES: [f64; 5] = [0.1, 0.25, 0.5, 1.0, 2.0];
 
-const START_POSITION: Vec2 = Vec2::ZERO;
-const START_HEADING: f64 = 0.0;
+const CAR_FILE: &str = "config/car.toml";
+const TRACK_FILE: &str = "tracks/test_loop.toml";
+const BUILT_IN_TRACK: &str = include_str!("../../../../tracks/test_loop.toml");
 
 pub struct PlayScreen {
-    car: Car,
+    world: World,
+    mesh: TrackMesh,
     previous: Pose,
-    config: Option<WatchedConfig<CarParams>>,
+    car_config: Option<WatchedConfig<CarParams>>,
+    track_config: Option<WatchedConfig<TrackDef>>,
     config_timer: f64,
     input: Input,
     autopilot: Option<Autopilot>,
@@ -56,22 +62,33 @@ impl Pose {
 
 impl PlayScreen {
     pub fn new(autopilot: bool) -> Self {
-        let (config, params, toast) = match WatchedConfig::<CarParams>::load(car_config_path()) {
-            Ok(config) => {
-                let params = config.get().clone();
-                (Some(config), params, None)
-            }
-            Err(err) => (None, CarParams::default(), Some((format!("using built-in car: {err}"), 6.0))),
-        };
-        let car = Car::new(params, START_POSITION, START_HEADING);
+        let mut warnings = vec![];
+        let car_config = WatchedConfig::<CarParams>::load(workspace_file(CAR_FILE))
+            .map_err(|err| warnings.push(format!("using built-in car: {err}")))
+            .ok();
+        let params = car_config.as_ref().map_or_else(CarParams::default, |c| c.get().clone());
+
+        let track_config = WatchedConfig::<TrackDef>::load(workspace_file(TRACK_FILE))
+            .map_err(|err| warnings.push(format!("using built-in track: {err}")))
+            .ok();
+        let track = track_config
+            .as_ref()
+            .and_then(|c| Track::build(c.get().clone()).map_err(|err| warnings.push(format!("track: {err}"))).ok())
+            .unwrap_or_else(built_in_track);
+
+        let mesh = TrackMesh::new(&track);
+        let world = World::new(Arc::new(track), params);
+        let start = world.car.state.position;
         Self {
-            previous: Pose::of(&car.state),
-            car,
-            config,
+            previous: Pose::of(&world.car.state),
+            world,
+            mesh,
+            car_config,
+            track_config,
             config_timer: 0.0,
             input: Input::new(),
             autopilot: autopilot.then(Autopilot::new),
-            camera: FollowCamera::new(START_POSITION),
+            camera: FollowCamera::new(start),
             history: History::new(),
             effects: Effects::new(),
             accumulator: 0.0,
@@ -81,14 +98,14 @@ impl PlayScreen {
             show_telemetry: true,
             show_gamepad: false,
             show_help: true,
-            toast,
+            toast: (!warnings.is_empty()).then(|| (warnings.join("; "), 8.0)),
         }
     }
 
     pub fn update(&mut self, dt: f64) {
         let dt = dt.min(0.1);
         self.handle_keys();
-        self.reload_config(dt);
+        self.reload_configs(dt);
         if let Some((_, remaining)) = &mut self.toast {
             *remaining -= dt;
             if *remaining <= 0.0 {
@@ -109,13 +126,14 @@ impl PlayScreen {
         let mut ticks = 0;
         while self.accumulator >= TICK && ticks < MAX_TICKS_PER_FRAME {
             let controls = match &mut self.autopilot {
-                Some(autopilot) => autopilot.controls(&self.car.state, &self.car.params, TICK),
+                Some(autopilot) => autopilot.controls(&self.world, TICK),
                 None => input,
             };
-            self.previous = Pose::of(&self.car.state);
-            self.car.step(controls, TICK);
-            self.history.record(&self.car.state);
-            self.effects.on_tick(&self.car.state, &self.car.params, TICK);
+            self.previous = Pose::of(&self.world.car.state);
+            self.world.step(controls, TICK);
+            let car = &self.world.car;
+            self.effects.on_tick(&car.state, &car.params, self.world.contacts(), TICK);
+            self.history.record(&car.state);
             self.accumulator -= TICK;
             ticks += 1;
         }
@@ -124,32 +142,35 @@ impl PlayScreen {
         }
 
         let shown = self.interpolated();
-        self.camera.update(shown.position, self.car.state.velocity, dt);
+        self.camera.update(shown.position, self.world.car.state.velocity, dt);
     }
 
     pub fn draw(&self) {
         let shown = self.interpolated();
-        let mut state = self.car.state.clone();
+        let car = &self.world.car;
+        let mut state = car.state.clone();
         state.position = shown.position;
         state.heading = shown.heading;
 
         self.camera.apply();
         ground::draw(&self.camera);
+        self.mesh.draw(&self.camera);
         if self.show_effects {
-            self.effects.draw_ground(&self.camera);
+            self.effects.draw_ground(&self.camera, &car.params);
         }
-        render::car::draw(&state, &self.car.params);
+        render::car::draw(&state, &car.params, &self.effects.damage);
         if self.show_effects {
             self.effects.draw_air();
         }
         if self.show_telemetry {
-            telemetry::draw_world(&state, &self.car.params);
+            telemetry::draw_world(&state, &car.params);
         }
 
         set_default_camera();
-        hud::draw(&state, &self.car.params);
+        hud::draw(&state, &car.params);
+        hud::draw_track_info(&self.world);
         if self.show_telemetry {
-            telemetry::draw_panel(&state, &self.car.params);
+            telemetry::draw_panel(&state, &car.params);
             self.history.draw();
         }
         if self.show_gamepad {
@@ -162,7 +183,7 @@ impl PlayScreen {
     /// refresh rate.
     fn interpolated(&self) -> Pose {
         let alpha = (self.accumulator / TICK).clamp(0.0, 1.0);
-        let current = Pose::of(&self.car.state);
+        let current = Pose::of(&self.world.car.state);
         Pose {
             position: self.previous.position.lerp(current.position, alpha),
             heading: wrap_angle(self.previous.heading + angle_diff(self.previous.heading, current.heading) * alpha),
@@ -170,9 +191,9 @@ impl PlayScreen {
     }
 
     fn reset(&mut self) {
-        self.car.state = CarState::at_rest(&self.car.params, START_POSITION, START_HEADING);
-        self.previous = Pose::of(&self.car.state);
-        self.camera.snap_to(START_POSITION);
+        self.world.reset();
+        self.previous = Pose::of(&self.world.car.state);
+        self.camera.snap_to(self.world.car.state.position);
         self.history.clear();
         self.effects.clear();
         if self.autopilot.is_some() {
@@ -211,20 +232,38 @@ impl PlayScreen {
         }
     }
 
-    fn reload_config(&mut self, dt: f64) {
+    fn reload_configs(&mut self, dt: f64) {
         self.config_timer += dt;
         if self.config_timer < CONFIG_POLL_SECS {
             return;
         }
         self.config_timer = 0.0;
-        let Some(config) = &mut self.config else { return };
-        match config.poll() {
-            Some(Ok(())) => {
-                self.car.params = config.get().clone();
-                self.toast = Some(("car.toml reloaded".to_owned(), 2.0));
+
+        if let Some(config) = &mut self.car_config {
+            match config.poll() {
+                Some(Ok(())) => {
+                    self.world.car.params = config.get().clone();
+                    self.toast = Some(("car.toml reloaded".to_owned(), 2.0));
+                }
+                Some(Err(err)) => self.toast = Some((format!("car.toml rejected: {err}"), 6.0)),
+                None => {}
             }
-            Some(Err(err)) => self.toast = Some((format!("car.toml rejected: {err}"), 6.0)),
-            None => {}
+        }
+
+        if let Some(config) = &mut self.track_config {
+            match config.poll() {
+                Some(Ok(())) => match Track::build(config.get().clone()) {
+                    Ok(track) => {
+                        self.mesh = TrackMesh::new(&track);
+                        self.world = World::new(Arc::new(track), self.world.car.params.clone());
+                        self.reset();
+                        self.toast = Some(("track reloaded".to_owned(), 2.0));
+                    }
+                    Err(err) => self.toast = Some((format!("track rejected: {err}"), 6.0)),
+                },
+                Some(Err(err)) => self.toast = Some((format!("track rejected: {err}"), 6.0)),
+                None => {}
+            }
         }
     }
 
@@ -263,13 +302,7 @@ impl PlayScreen {
     }
 }
 
-/// `config/car.toml` relative to where the viewer was started, falling back
-/// to the workspace copy.
-fn car_config_path() -> PathBuf {
-    let local = PathBuf::from("config/car.toml");
-    if local.exists() {
-        local
-    } else {
-        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/car.toml"))
-    }
+fn built_in_track() -> Track {
+    let def: TrackDef = toml::from_str(BUILT_IN_TRACK).expect("built-in track is invalid");
+    Track::build(def).expect("built-in track does not build")
 }

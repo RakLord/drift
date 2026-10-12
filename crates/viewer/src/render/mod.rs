@@ -7,6 +7,7 @@ pub mod effects;
 pub mod ground;
 pub mod hud;
 pub mod theme;
+pub mod track;
 
 use common::Vec2;
 use macroquad::prelude as mq;
