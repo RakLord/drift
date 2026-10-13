@@ -45,6 +45,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 
 **In progress: M4** (network view and run dashboard already done)
 - Done: replays (see *Replays*): the trainer records the saved best every `replays.every` gens; the viewer plays them back (`--replays <run>`), and `X` saves the last AI run.
+- Done: video export (see *Replays › Video export*): `R` in a replay, `--video`, or the launcher's "Export video…" writes a small MP4.
 - Done: live multi-car viewer (see *Live multi-car viewer*): `--watch <run>` races the run's `top.genomes` together.
 - Next: the human review grid, then visual polish.
 
@@ -70,6 +71,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `cargo run -p viewer -- --watch <run>`: the run's top genomes racing live (Tab / click to follow, `O` leaderboard)
 - While following a run (`--follow`): `Q` opens its top cars, `J` its replays (`Q` / `J` also switch between those two); Esc goes back. `cargo drift` → Runs → a run has the same two options
 - `cargo run -p viewer -- --replays <run>`: watch a run's replays (newest first, picker open); `--replay <file>` for one file; `X` while an AI drives saves its last run
+- `cargo run -p viewer -- --replay <file> --video <out.mp4 | folder/>`: record a replay to MP4 and exit. `--genome <path> | --follow <run>` with `--track <toml> | --seed N` instead drives that genome on the track first (saved as `replays/video_gNNNNN_<track>.replay`). `R` in the replay screen does the same for the open replay
 - `cargo run -p viewer -- --tracks [--run <run>]`: the track screen (`O` from play; while following a run it opens on that run). `--set <file>` edits just that file's `[tracks]` (the launcher uses it)
 
 **Tuning notes**
@@ -287,6 +289,14 @@ Outputs are produced once per decision and held until the next one.
   - the trainer: every `replays.every` generations (default 10), the saved best re-run on each of that generation's tracks (identical to its scored run), into `runs/<run>/replays/`
   - the viewer: `X` saves the last AI run (AI runs only).
 - **Playback:** interpolated between frames; smoke, skids and sparks regenerate from the recorded wheel states and contacts. `--replay <file>` or `--replays <run>` (picker). Timeline with score-event ticks, click/drag to seek; Space play/pause, `,` `.` step, `[` `]` speed; the usual toggles. Seeking rebuilds the effects from the start.
+
+### Video export
+
+- **What:** an MP4 of a replay, under 10 MB, to share. Follow camera with the HUD (speed/angle, score, track info, pedals); no status line, help, timeline, picker, telemetry or network view.
+- **How:** the replay screen plays from the start at exactly one recorded frame per video frame (30 fps, so the video doesn't depend on how fast the machine draws) and pipes each frame to the system `ffmpeg` (no new crates): H.264, 720p (width follows the window), CRF 26, with a peak bitrate of 9 MB over the video's length so long runs still fit. The last frame holds 1.5 s.
+- **Window:** it captures the window as drawn, so it waits for the window size to settle first (a tiling WM resizes new windows) and stops if the window is resized mid-export. A REC line shows in the window, not in the video; Esc cancels and deletes the partial file.
+- **Where:** `R` writes `runs/<run>/videos/<replay>.mp4`; the launcher's "Export video…" (a run's menu) does a replay or the best driver on a saved track; `--video` from the command line.
+- **Genome on any track:** driven by the trainer's own episode code with the run's config (same as training), saved as a replay first so the video can be made again.
 
 ## Live multi-car viewer
 

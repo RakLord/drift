@@ -1,7 +1,7 @@
 //! Free-drive screen: one car on a track, driven by you.
 
 mod ai_recorder;
-mod configs;
+pub(crate) mod configs;
 mod generator_panel;
 mod tracks;
 

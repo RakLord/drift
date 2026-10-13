@@ -35,7 +35,7 @@ struct TrainingFile {
 }
 
 impl RunSettings {
-    fn for_genome(path: &Path) -> Self {
+    pub(crate) fn for_genome(path: &Path) -> Self {
         let dir = path.parent().unwrap_or(Path::new(".")).join("config");
         let episode = common::config::load::<TrainingFile>(dir.join("training.toml")).map_or_else(
             |_| EpisodeConfig {

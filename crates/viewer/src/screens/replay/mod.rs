@@ -6,6 +6,8 @@
 //! the start. With the genome and inputs recorded, the network view replays
 //! exactly what the driver saw and did.
 
+mod export;
+pub mod fresh;
 mod picker;
 mod timeline;
 
@@ -28,6 +30,7 @@ use crate::debug::network_view::NetworkView;
 use crate::debug::{driver_prep_panel, inputs_panel, telemetry};
 use crate::render::score::ScoreHud;
 use crate::render::{self, camera::FollowCamera, effects::Effects, ground, hud, text, theme, track::TrackMesh};
+pub use export::default_path as default_video_path;
 use picker::Picker;
 use timeline::Timeline;
 
@@ -82,6 +85,9 @@ pub struct ReplayScreen {
     show_help: bool,
     toast: Option<(String, f64)>,
     switch: Option<super::Switch>,
+    /// Recording to video (`R` / `--video`), if it is.
+    export: Option<export::Export>,
+    export_result: Option<Result<(PathBuf, u64), String>>,
 }
 
 impl ReplayScreen {
@@ -129,6 +135,8 @@ impl ReplayScreen {
             show_help: true,
             toast,
             switch: None,
+            export: None,
+            export_result: None,
         };
         screen.show_frame();
         Ok(screen)
@@ -173,12 +181,20 @@ impl ReplayScreen {
     }
 
     pub fn update(&mut self, dt: f64) {
-        let dt = dt.min(0.1);
+        // Recording: exactly one recorded frame per video frame, however
+        // long the frame really took.
+        let dt = match &self.export {
+            Some(export) if export.settling() => 0.0,
+            Some(_) => 1.0 / f64::from(crate::video::FPS),
+            None => dt.min(0.1),
+        };
         if let Some(path) = self.open.take() {
             self.switch_to(path);
             return;
         }
-        self.handle_keys();
+        if !self.exporting() {
+            self.handle_keys();
+        }
         self.dashboard.update(dt);
         self.score_hud.update(dt);
         if let Some((_, remaining)) = &mut self.toast {
@@ -298,6 +314,11 @@ impl ReplayScreen {
         if is_key_pressed(KeyCode::Home) {
             self.seek = Some(0.0);
         }
+        if is_key_pressed(KeyCode::R)
+            && let Err(err) = self.start_export(default_video_path(&self.path))
+        {
+            self.toast = Some((err, 5.0));
+        }
         if is_key_pressed(KeyCode::LeftBracket) {
             self.speed_index = self.speed_index.saturating_sub(1);
         }
@@ -358,9 +379,15 @@ impl ReplayScreen {
     }
 
     pub fn draw(&mut self) {
+        if self.exporting() {
+            // Just the track and the HUD, down to the bottom edge.
+            self.draw_track_view(screen_width(), screen_height() - 16.0);
+            self.record_frame();
+            return;
+        }
         let view_w = self.track_width();
         if self.net_view != NetView::Full {
-            self.draw_track_view(view_w);
+            self.draw_track_view(view_w, screen_height() - STRIP_H);
         }
         self.draw_network_view();
         self.draw_status(view_w);
@@ -373,7 +400,8 @@ impl ReplayScreen {
         self.dashboard.draw();
     }
 
-    fn draw_track_view(&mut self, view_w: f32) {
+    /// The world, then the HUD with its bottom edge at `bottom`.
+    fn draw_track_view(&mut self, view_w: f32, bottom: f32) {
         let car = &self.world.car;
         let state = &car.state;
         self.camera.apply();
@@ -392,7 +420,6 @@ impl ReplayScreen {
         }
 
         set_default_camera();
-        let bottom = screen_height() - STRIP_H;
         hud::draw_at(state, &car.params, view_w, bottom);
         hud::draw_track_info(&self.world, view_w);
         self.score_hud.draw(&self.scorer, view_w);
@@ -448,7 +475,7 @@ impl ReplayScreen {
         let help: &[&str] = if self.show_help {
             &[
                 "Space play/pause  Left/Right -/+2 s  , . frame  Home restart  [ ] speed  timeline: click/drag",
-                "O replays  Up/Down prev/next  Q top cars  V network  I inputs  M map  E effects  T telemetry  C run charts  H help",
+                "O replays  Up/Down prev/next  Q top cars  V network  I inputs  M map  E effects  T telemetry  C run charts  R video  H help",
             ]
         } else {
             &["H: help"]

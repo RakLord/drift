@@ -299,6 +299,9 @@ impl App {
         if has_replays {
             actions.push("Replays");
         }
+        if has_replays || has_best {
+            actions.push("Export video…");
+        }
         actions.push("Its tracks (maps)");
         if run.running() {
             actions.extend(["Show log", "Stop training"]);
@@ -312,6 +315,7 @@ impl App {
             "Watch live" | "Watch best driver" => self.watch(run),
             "Watch top cars (multi-car)" => self.watch_top(run),
             "Replays" => self.replays(run),
+            "Export video…" => crate::video::export(run),
             "Its tracks (maps)" => self.track_screen(Some(run)),
             "Stop training" => self.stop(run),
             "Resume training…" => self.resume(run),

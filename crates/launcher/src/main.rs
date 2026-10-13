@@ -9,6 +9,7 @@ mod launch;
 mod paths;
 mod runs;
 mod tracks;
+mod video;
 
 use std::fmt;
 

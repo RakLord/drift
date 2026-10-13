@@ -1,6 +1,6 @@
 //! Top-level app: owns the active screen and dev options.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use macroquad::prelude::*;
 
@@ -46,11 +46,15 @@ pub struct Options {
     pub replays: bool,
     /// Race this run's top genomes live.
     pub watch: Option<String>,
+    /// Record the replay (or the genome's run on the track) to this video
+    /// file, then exit. A folder (existing, or ending in `/`) gets a file
+    /// named after the replay.
+    pub video: Option<PathBuf>,
 }
 
 impl Options {
     /// `[--seed N | --track path] [--map] [--generator] [--tracks [--run run | --set file]] [--genome path | --follow run] [--net]
-    /// [--replay file | --replays run | --watch run] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
+    /// [--replay file | --replays run | --watch run] [--video out.mp4] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
     pub fn from_args() -> Self {
         let mut options = Self::default();
         let mut frames = 240;
@@ -74,6 +78,7 @@ impl Options {
                 "--charts" => options.charts = true,
                 "--replay" => options.replay = args.next().map(PathBuf::from),
                 "--watch" => options.watch = args.next(),
+                "--video" => options.video = args.next().map(PathBuf::from),
                 "--replays" => {
                     // A run's newest replay, with the picker open.
                     if let Some(run) = args.next() {
@@ -194,6 +199,13 @@ pub struct App {
 
 impl App {
     pub fn new(options: Options) -> Self {
+        if let Some(out) = &options.video {
+            let replay = Self::video_replay(&options, out).unwrap_or_else(|err| {
+                eprintln!("{err}");
+                std::process::exit(1);
+            });
+            return Self { screen: Screen::Replay(Box::new(replay)), options, back: None, tracks_return: None, frame: 0 };
+        }
         if let Some(run) = &options.watch {
             let mut watch = WatchScreen::new(run, options.charts);
             if options.net {
@@ -228,6 +240,30 @@ impl App {
         Self { options, screen, back: None, tracks_return: None, frame: 0 }
     }
 
+    /// `--video`: the replay to record, from a file or a genome's fresh run,
+    /// already recording.
+    fn video_replay(options: &Options, out: &Path) -> Result<ReplayScreen, String> {
+        let path = match (&options.replay, &options.genome) {
+            (Some(path), _) => path.clone(),
+            (None, Some(genome)) => {
+                let (track, name) = replay::fresh::track(options.track.as_deref(), options.seed)?;
+                let path = replay::fresh::record(genome, track, &name)?;
+                println!("recorded {}", path.display());
+                path
+            }
+            (None, None) => return Err("--video needs --replay <file>, or --genome / --follow with a track".to_owned()),
+        };
+        let out = if out.is_dir() || out.to_string_lossy().ends_with('/') {
+            let stem = path.file_stem().map_or_else(|| "replay".into(), |s| s.to_string_lossy().into_owned());
+            out.join(format!("{stem}.mp4"))
+        } else {
+            out.to_owned()
+        };
+        let mut screen = ReplayScreen::new(path, false, false)?;
+        screen.start_export(out)?;
+        Ok(screen)
+    }
+
     pub fn frame(&mut self) -> Flow {
         // A screenshot run uses a fixed frame time so it is reproducible.
         // Checked before the frame runs: Esc that cancels typing mustn't quit.
@@ -259,6 +295,25 @@ impl App {
             self.open(switch);
         }
         self.frame += 1;
+
+        if self.options.video.is_some()
+            && let Screen::Replay(replay) = &mut self.screen
+            && let Some(result) = replay.take_export_result()
+        {
+            // The screen already said how it went.
+            if result.is_err() {
+                std::process::exit(1);
+            }
+            return Flow::Exit;
+        }
+        if let Screen::Replay(replay) = &mut self.screen
+            && replay.exporting()
+        {
+            if is_key_pressed(KeyCode::Escape) {
+                replay.cancel_export();
+            }
+            return Flow::Continue;
+        }
 
         if let Some((path, frames)) = &self.options.screenshot
             && self.frame >= *frames

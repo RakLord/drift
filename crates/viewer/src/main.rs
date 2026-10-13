@@ -8,6 +8,7 @@ mod paths;
 mod render;
 mod screens;
 mod ui;
+mod video;
 
 use macroquad::prelude::*;
 
