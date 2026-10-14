@@ -49,7 +49,8 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - Done: live multi-car viewer (see *Live multi-car viewer*): `--watch <run>` races the run's `top.genomes` together.
 - Done: driver dash (`render/hud.rs`): one bottom-centre panel with speed (mph), drift angle, tach, clutch temp, a steering wheel (turns with the steer request, ±270°; a cyan dot marks the actual rack) and clutch / brake / throttle / handbrake bars. On the play screen it sits above the help text.
 - Done: human review (see *Human review*): `--review <run>` shows 12 of the run's drivers on a 4×3 grid; picked ones are sent to the trainer, which protects them for 50 gens and floods their island with their children.
-- Next: visual polish.
+- Done: night lighting and neon glow (see *Visual style*): street lamps placed from the track, headlight beams, tail and brake lights, glowing zones, sparks and combo, a vignette.
+- Next: katakana HUD accents and coloured tyre smoke (the rest of *Visual style*).
 
 **Conventions**
 - The sim uses `f64` (SI units). The NN will use `f32`.
@@ -301,6 +302,23 @@ Outputs are produced once per decision and held until the next one.
 - **Saved best (`[best]`):** the top few genomes by fitness also drive some extra tracks (pool tracks not drawn this generation, then generated); the best over all its runs is saved as best.genome, judges curriculum advance and runs the test set, so a lucky draw can't replace a steadier driver.
 - **Monitoring:** see *Network view & metrics*.
 
+## Visual style
+
+JDM night: dark asphalt lit by sodium street lamps, neon accents. All viewer-only; the sim and training never see it.
+
+- **Light as additive sprites (`render/light.rs`):** one additive-blend material and three procedural textures (radial glow, headlight cone, vignette). No render targets, so the window's 4× MSAA, video export and the review grid's per-tile viewports work unchanged. Everything is culled to the camera's view.
+- **Two passes per world view:**
+  - on the road, before the cars: lamp pools, zone glow, headlight beams (so a pack's beams light the road, not each other's paint; the watch screen also dims the pack's beams to 30%)
+  - over the cars: tail lights (flaring on the brakes), spark glow
+  - then a screen-space vignette (not on review tiles)
+- **Street lamps (`render/lamps.rs`):** tracks carry no lights, so they're placed once per track: one on the outside of each corner's apex, then about every 35 m on alternating sides, behind the wall or on the verge fence, never where the edge is open (crossings), at least 18 m apart.
+- **Neon:** outer zones and clips glow (stronger while being scored), sparks glow, and the combo glows brighter as its multiplier climbs.
+- **Palette (`render/theme.rs`):** asphalt, verge and ground a step darker than before so the pools carry the scene. Light strengths are named constants in `light.rs`, `lamps.rs`, `car.rs`, `track.rs` and `score.rs`.
+- `E` (effects) turns the lighting off with the smoke, to compare.
+- *(Later)* Katakana accents beside the English labels (English stays the main text): needs a bundled subset of a JP font (Noto Sans CJK JP, OFL), made with fonttools.
+- *(Later)* Coloured tyre smoke (per island on watch / review).
+- *(Later, from Driver prep)* A camera fly-through at the start of a run, and corners popping up in the HUD.
+
 ## Replays
 
 - **File (`.replay`, `agent::replay_file`):** magic + version, a TOML header, then binary data.
@@ -460,7 +478,8 @@ drift/
       screens/               play, watch (live multi-car), review (4×3 pick grid), replay, tracks (track screen),
                              library (track files)
       dashboard/             run dashboard: pages, chart, kpi, trend, gate, metrics
-      render/                camera, car, track, ground, hud, score, thumb (map cards), theme (JDM palette)
+      render/                camera, car, track, lamps (street lamps), light (additive glow), ground, hud, score,
+                             thumb (map cards), theme (JDM palette)
         effects/             smoke, skidmarks, sparks, damage
       debug/                 telemetry, history, inputs, gamepad and driver prep panels,
                              network_view/ (layout, edges, health, inspect, outputs)

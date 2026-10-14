@@ -29,7 +29,7 @@ use crate::debug::{driver_prep_panel, inputs_panel, telemetry};
 use crate::paths::workspace_file;
 use crate::render::effects::damage::Damage;
 use crate::render::score::ScoreHud;
-use crate::render::{self, camera::FollowCamera, effects::Effects, ground, hud, text, theme, track::TrackMesh};
+use crate::render::{self, camera::FollowCamera, effects::Effects, ground, hud, light, text, theme, track::TrackMesh};
 use driver_info::DriverInfo;
 use leaderboard::Leaderboard;
 use racer::Racer;
@@ -45,6 +45,9 @@ const SEED: u64 = 1;
 const SPLIT_TRACK_SHARE: f32 = 0.45;
 /// Room at the bottom for the status line and help; the HUD sits above it.
 const STRIP_H: f32 = 52.0;
+/// The pack's headlights are dimmed to this (30 overlapping beams would
+/// flood the road); the followed car's are full strength.
+const PACK_BEAMS: f32 = 0.3;
 /// Clicking within this many metres of a car follows it.
 const CLICK_RADIUS: f64 = 5.0;
 pub(super) const DEFAULT_TRACK: &str = "config/default_track.toml";
@@ -487,6 +490,13 @@ impl WatchScreen {
         let params = &followed.episode().world.car.params;
         if self.show_effects {
             self.effects.draw_ground(&self.camera, params);
+            light::pass(|| {
+                self.mesh.draw_lights(&self.camera, &followed.episode().scorer.zone_lit);
+                for (i, r) in self.racers.iter().enumerate() {
+                    let strength = if i == self.followed { 1.0 } else if r.end.is_some() { 0.0 } else { PACK_BEAMS };
+                    render::car::draw_beams(&r.shown_state(alpha), &r.episode().world.car.params, strength);
+                }
+            });
         }
         // The pack first, the followed car on top.
         for (i, r) in self.racers.iter().enumerate() {
@@ -505,12 +515,23 @@ impl WatchScreen {
         render::car::draw_painted(&state, params, &self.effects.damage, paint, roof_of(paint), 1.0);
         if self.show_effects {
             self.effects.draw_air();
+            light::pass(|| {
+                for (i, r) in self.racers.iter().enumerate() {
+                    let fade = if i == self.followed { 1.0 } else if r.end.is_some() { 0.3 } else { 0.85 };
+                    let damage = if i == self.followed { &self.effects.damage } else { &self.no_damage };
+                    render::car::draw_tail_lights(&r.shown_state(alpha), &r.episode().world.car.params, damage, fade);
+                }
+                self.effects.draw_lights();
+            });
         }
         if self.show_telemetry {
             telemetry::draw_world(&state, params);
         }
 
         set_default_camera();
+        if self.show_effects {
+            light::vignette(view_w, screen_height());
+        }
         let bottom = screen_height() - STRIP_H;
         let world = &followed.episode().world;
         hud::draw_at(&state, params, view_w, bottom);

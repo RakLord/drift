@@ -1,4 +1,6 @@
-//! Colours. JDM night: dark asphalt, sodium orange, neon accents.
+//! Colours. JDM night: dark asphalt lit by sodium street lamps, neon
+//! accents. Light colours are drawn additively (`light`): their alpha is
+//! how strongly they light what's under them.
 
 use macroquad::prelude::Color;
 
@@ -10,9 +12,9 @@ const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
     Color::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a as f32 / 255.0)
 }
 
-pub const ASPHALT: Color = rgb(38, 40, 48);
-pub const GROUND: Color = rgb(16, 18, 20);
-pub const GRASS: Color = rgb(24, 36, 28);
+pub const ASPHALT: Color = rgb(30, 32, 39);
+pub const GROUND: Color = rgb(11, 12, 14);
+pub const GRASS: Color = rgb(18, 28, 22);
 pub const EDGE_PAINT: Color = rgb(214, 212, 200);
 pub const CONCRETE: Color = rgb(128, 130, 136);
 pub const CONCRETE_DARK: Color = rgb(104, 106, 112);
@@ -29,6 +31,11 @@ pub const CAR_SHADOW: Color = rgba(0, 0, 0, 110);
 pub const TYRE: Color = rgb(12, 12, 14);
 pub const BRAKE_LIGHT_OFF: Color = rgb(90, 18, 24);
 pub const BRAKE_LIGHT_ON: Color = rgb(255, 40, 60);
+
+pub const SODIUM_LIGHT: Color = rgb(255, 156, 52);
+pub const HEADLIGHT: Color = rgb(255, 238, 205);
+pub const TAIL_LIGHT: Color = rgb(255, 30, 45);
+pub const LAMP_POST: Color = rgb(70, 74, 82);
 
 pub const SMOKE: Color = rgb(226, 224, 230);
 pub const SKID: Color = rgb(6, 6, 8);

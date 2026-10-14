@@ -1,12 +1,15 @@
 //! Track rendering: grass verges, asphalt, painted edges, concrete walls,
-//! verge fences and the start line. Geometry is built once per track.
+//! verge fences, street lamps and the start line. Geometry is built once
+//! per track. `draw_lights` adds the lamps' pools and the zones' neon glow
+//! (inside `light::pass`).
 
 use common::Vec2;
 use macroquad::prelude::*;
 use sim::track::{EdgeKind, Side, Track, ZoneKind};
 
 use super::camera::FollowCamera;
-use super::{draw_box, draw_segment, theme, to_mq};
+use super::lamps::{self, Lamp};
+use super::{draw_box, draw_segment, light, theme, to_mq};
 
 const WALL_THICKNESS: f64 = 0.7;
 const WALL_BLOCK: usize = 4; // samples per alternating barrier block
@@ -16,6 +19,11 @@ const FENCE_POST_EVERY: usize = 5;
 const ZONE_WIDTH: f64 = 1.6;
 const ZONE_STRIPE: usize = 2; // samples per stripe
 const CLIP_RADIUS: f64 = 0.6;
+/// Neon glow over the zones: one glow every this many samples along an
+/// outer zone, and the strength unlit / lit.
+const ZONE_GLOW_EVERY: usize = 3;
+const ZONE_GLOW: (f32, f32) = (0.06, 0.22);
+const CLIP_GLOW: (f32, f32) = (0.12, 0.45);
 
 /// Per-sample cross-section points, from the centreline outwards.
 struct Slice {
@@ -46,6 +54,7 @@ struct ZoneMesh {
 pub struct TrackMesh {
     slices: Vec<Slice>,
     zones: Vec<ZoneMesh>,
+    lamps: Vec<Lamp>,
     half_width: f64,
     verge: f64,
 }
@@ -90,7 +99,7 @@ impl TrackMesh {
                 ZoneMesh { kind: z.kind, side, samples, point: z.point }
             })
             .collect();
-        Self { slices, zones, half_width: half, verge }
+        Self { slices, zones, lamps: lamps::place(track), half_width: half, verge }
     }
 
     pub fn draw(&self, camera: &FollowCamera) {
@@ -142,6 +151,32 @@ impl TrackMesh {
             }
         }
         self.draw_start_line();
+        lamps::draw_posts(&self.lamps, camera);
+    }
+
+    /// Lamp pools and the zones' neon glow, stronger on a zone being scored
+    /// (`lit`). Call inside `light::pass`.
+    pub fn draw_lights(&self, camera: &FollowCamera, lit: &[bool]) {
+        lamps::draw_pools(&self.lamps, camera);
+        for (zone, &lit) in self.zones.iter().zip(lit.iter().chain(std::iter::repeat(&false))) {
+            match zone.kind {
+                ZoneKind::Outer => {
+                    let sign = if zone.side == 0 { 1.0 } else { -1.0 };
+                    let alpha = if lit { ZONE_GLOW.1 } else { ZONE_GLOW.0 };
+                    for &i in zone.samples.iter().step_by(ZONE_GLOW_EVERY) {
+                        let s = &self.slices[i];
+                        let middle = s.edge[zone.side] - s.normal * (sign * ZONE_WIDTH / 2.0);
+                        if light::in_view(camera, middle, ZONE_WIDTH * 2.0) {
+                            light::glow(middle, ZONE_WIDTH * 2.0, Color { a: alpha, ..theme::NEON_PINK });
+                        }
+                    }
+                }
+                ZoneKind::Clip => {
+                    let alpha = if lit { CLIP_GLOW.1 } else { CLIP_GLOW.0 };
+                    light::glow(zone.point, CLIP_RADIUS * 4.0, Color { a: alpha, ..theme::SODIUM_LIGHT });
+                }
+            }
+        }
     }
 
     /// Zones painted on the asphalt; `lit[i]` brightens zone `i` while it is
@@ -163,9 +198,6 @@ impl TrackMesh {
                 }
                 ZoneKind::Clip => {
                     let p = to_mq(zone.point);
-                    if lit {
-                        draw_circle(p.x, p.y, (CLIP_RADIUS * 2.5) as f32, Color { a: 0.25, ..theme::SODIUM });
-                    }
                     draw_circle(p.x, p.y, CLIP_RADIUS as f32, theme::SODIUM);
                     draw_circle(p.x, p.y, (CLIP_RADIUS * 0.45) as f32, theme::EDGE_PAINT);
                 }

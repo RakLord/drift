@@ -6,6 +6,8 @@ pub mod car;
 pub mod effects;
 pub mod ground;
 pub mod hud;
+pub mod lamps;
+pub mod light;
 pub mod score;
 pub mod theme;
 pub mod thumb;

@@ -23,7 +23,7 @@ use crate::debug::{inputs_panel, driver_prep_panel, gamepad_panel, history::Hist
 use crate::input::{Input, ai::AiDriver, autopilot::Autopilot};
 use crate::paths::workspace_file;
 use crate::render::score::ScoreHud;
-use crate::render::{self, camera::FollowCamera, effects::Effects, ground, hud, text, theme, track::TrackMesh};
+use crate::render::{self, camera::FollowCamera, effects::Effects, ground, hud, light, text, theme, track::TrackMesh};
 use ai_recorder::AiRecorder;
 use configs::{Configs, Reload};
 use super::library;
@@ -301,10 +301,18 @@ impl PlayScreen {
         self.mesh.draw_zones(&self.scorer.zone_lit);
         if self.show_effects {
             self.effects.draw_ground(&self.camera, &car.params);
+            light::pass(|| {
+                self.mesh.draw_lights(&self.camera, &self.scorer.zone_lit);
+                render::car::draw_beams(&state, &car.params, 1.0);
+            });
         }
         render::car::draw(&state, &car.params, &self.effects.damage);
         if self.show_effects {
             self.effects.draw_air();
+            light::pass(|| {
+                render::car::draw_tail_lights(&state, &car.params, &self.effects.damage, 1.0);
+                self.effects.draw_lights();
+            });
         }
         if self.show_telemetry {
             telemetry::draw_world(&state, &car.params);
@@ -312,6 +320,9 @@ impl PlayScreen {
 
         set_default_camera();
         let view_w = self.track_width();
+        if self.show_effects {
+            light::vignette(view_w, screen_height());
+        }
         let bottom = self.hud_bottom(view_w);
         hud::draw_at(&state, &car.params, view_w, bottom);
         hud::draw_track_info(&self.world, view_w);

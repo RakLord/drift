@@ -30,7 +30,7 @@ use super::watch::{DEFAULT_TRACK, TrackChoice, build, first_fixed_track, island_
 use crate::paths::workspace_file;
 use crate::render::effects::Effects;
 use crate::render::score::ScoreHud;
-use crate::render::{self, camera::FollowCamera, ground, hud, text, theme, track::TrackMesh};
+use crate::render::{self, camera::FollowCamera, ground, hud, light, text, theme, track::TrackMesh};
 use crate::ui::{ButtonStyle, button};
 use grid::Marks;
 use pick::Picks;
@@ -423,11 +423,20 @@ impl ReviewScreen {
         r.skids.draw(&self.camera);
         self.effects.draw_ground(&self.camera, params);
         let fade = if r.end.is_some() { 0.35 } else { 1.0 };
+        light::pass(|| {
+            self.mesh.draw_lights(&self.camera, &r.episode().scorer.zone_lit);
+            render::car::draw_beams(&state, params, fade);
+        });
         render::car::draw_painted(&state, params, &self.effects.damage, paint, roof_of(paint), fade);
         self.effects.draw_air();
+        light::pass(|| {
+            render::car::draw_tail_lights(&state, params, &self.effects.damage, fade);
+            self.effects.draw_lights();
+        });
         set_default_camera();
 
         let (w, bottom) = (screen_width(), screen_height() - STRIP_H);
+        light::vignette(w, bottom);
         hud::draw_at(&state, params, w, bottom);
         hud::draw_track_info(world, w);
         self.score_hud.draw(&r.episode().scorer, w);

@@ -1,10 +1,16 @@
 //! Score HUD: banked total with its Line/Angle/Style split, the live combo,
 //! and popups for scoring events.
 
+use common::Vec2;
 use macroquad::prelude::*;
 use sim::scoring::{ScoreEvent, ScoreEventKind, Scorer};
 
-use super::{text, theme};
+use super::{light, text, theme};
+
+/// The neon glow behind a running combo: radius (pixels) and strength,
+/// growing with the multiplier.
+const COMBO_GLOW_RADIUS: f64 = 130.0;
+const COMBO_GLOW: (f32, f32) = (0.10, 0.30);
 
 const POPUP_SECS: f64 = 1.6;
 const POPUP_RISE: f32 = 40.0;
@@ -65,6 +71,11 @@ impl ScoreHud {
         if combo.active {
             let value = combo.value().total();
             let line = format!("+{}  x{:.1}", format_points(value), combo.multiplier);
+            // x1 to the multiplier cap: dim to full glow.
+            let cap = scorer.params.combo.multiplier_max;
+            let heat = ((combo.multiplier - 1.0) / (cap - 1.0).max(1e-9)).clamp(0.0, 1.0) as f32;
+            let strength = COMBO_GLOW.0 + (COMBO_GLOW.1 - COMBO_GLOW.0) * heat;
+            light::pass(|| light::glow(Vec2::new(f64::from(cx), 116.0), COMBO_GLOW_RADIUS, Color { a: strength, ..theme::NEON_PINK }));
             centred(&line, cx, 128.0, 36.0, theme::NEON_PINK);
             if combo.taps > 0 {
                 centred(&format!("wall taps {}", combo.taps), cx, 148.0, 16.0, theme::TEXT_DIM);

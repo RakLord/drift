@@ -4,9 +4,12 @@ use common::{Rng, Vec2};
 use macroquad::prelude::*;
 use sim::world::Contact;
 
-use crate::render::{draw_segment, theme};
+use crate::render::{draw_segment, light, theme};
 
 const MAX_SPARKS: usize = 1500;
+/// Each spark's glow: radius (metres) and strength when fresh.
+const GLOW_RADIUS: f64 = 0.6;
+const GLOW_ALPHA: f32 = 0.35;
 const GRAVITY_LIKE_DRAG: f64 = 4.0;
 
 struct Spark {
@@ -67,6 +70,14 @@ impl Sparks {
             let heat = 1.0 - s.age / s.life;
             let color = Color { a: heat as f32, ..theme::SPARK };
             draw_segment(s.position, s.position - s.velocity * 0.03, 0.06, color);
+        }
+    }
+
+    /// Each spark's glow (inside `light::pass`).
+    pub fn draw_glow(&self) {
+        for s in &self.sparks {
+            let heat = 1.0 - s.age / s.life;
+            light::glow(s.position, GLOW_RADIUS, Color { a: heat as f32 * GLOW_ALPHA, ..theme::SPARK });
         }
     }
 }

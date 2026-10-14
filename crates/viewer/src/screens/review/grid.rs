@@ -9,7 +9,7 @@ use super::super::watch::racer::Racer;
 use crate::render::camera::FollowCamera;
 use crate::render::effects::damage::Damage;
 use crate::render::track::TrackMesh;
-use crate::render::{self, ground, text, theme};
+use crate::render::{self, ground, light, text, theme};
 use crate::ui::{chip, fit};
 
 const GAP: f32 = 4.0;
@@ -50,7 +50,13 @@ pub fn draw(camera: &mut FollowCamera, rect: Rect, mesh: &TrackMesh, racer: &Rac
     let state = racer.shown_state(alpha);
     let paint = island_colour(racer.entry.island);
     let fade = if racer.end.is_some() { 0.35 } else { 1.0 };
-    render::car::draw_painted(&state, &racer.episode().world.car.params, &Damage::new(), paint, roof_of(paint), fade);
+    let (params, no_damage) = (&racer.episode().world.car.params, Damage::new());
+    light::pass(|| {
+        mesh.draw_lights(camera, &racer.episode().scorer.zone_lit);
+        render::car::draw_beams(&state, params, fade);
+    });
+    render::car::draw_painted(&state, params, &no_damage, paint, roof_of(paint), fade);
+    light::pass(|| render::car::draw_tail_lights(&state, params, &no_damage, fade));
     set_default_camera();
 
     let (border, thickness) = match (marks.picked, marks.hovered) {

@@ -69,6 +69,11 @@ impl Effects {
         self.smoke.draw();
         self.sparks.draw();
     }
+
+    /// The sparks' glow (inside `light::pass`).
+    pub fn draw_lights(&self) {
+        self.sparks.draw_glow();
+    }
 }
 
 /// 0..1: how hard a tyre is sliding, weighted by how much it is pressed into
