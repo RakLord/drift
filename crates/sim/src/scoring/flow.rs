@@ -1,8 +1,10 @@
 //! Flow: how smoothly the car drifts, for training's drift quality. Each
 //! second of drifting earns the angle points' shape (full at a big but
 //! controlled angle) times a hold credit that builds up the longer one side
-//! is held. A linked transition carries most of it into the next side; a
-//! flick, an end or a spin starts it again from nothing.
+//! is held. A linked switch of sides carries most of it into the next side;
+//! a quick flick, an end or a spin starts it again from nothing. Linking is
+//! looser than judging: a side held `link_min_hold_secs` links even when
+//! it's too short to be judged a transition.
 
 use super::drift::DriftEvent;
 use super::params::ScoringParams;
@@ -15,20 +17,28 @@ pub struct Flow {
     pub credit: f64,
     /// Sides drifted so far: starts, transitions and flicks.
     pub sides: u32,
+    /// Seconds on the current side (unlike `hold`, not carried by a link).
+    side_secs: f64,
 }
 
 impl Flow {
     /// `event` is this tick's drift event, `active` whether the car is
     /// drifting after it, `deg` the absolute drift angle.
     pub fn update(&mut self, p: &ScoringParams, event: DriftEvent, active: bool, deg: f64, on_verge: bool, dt: f64) {
+        let linked = match event {
+            DriftEvent::Transition => true,
+            DriftEvent::Flick => p.flow.link_min_hold_secs.is_some_and(|min| self.side_secs >= min),
+            _ => false,
+        };
         match event {
-            DriftEvent::Started => self.sides += 1,
-            DriftEvent::Transition => {
-                self.hold = p.flow.link_keep * self.hold.min(p.flow.ramp_secs);
+            DriftEvent::Started => {
+                self.side_secs = 0.0;
                 self.sides += 1;
             }
-            DriftEvent::Flick => {
-                self.hold = 0.0;
+            DriftEvent::Transition | DriftEvent::Flick => {
+                let cap = p.flow.link_cap_secs.unwrap_or(p.flow.ramp_secs);
+                self.hold = if linked { p.flow.link_keep * self.hold.min(cap) } else { 0.0 };
+                self.side_secs = 0.0;
                 self.sides += 1;
             }
             DriftEvent::Ended | DriftEvent::Spin | DriftEvent::None => {}
@@ -39,6 +49,7 @@ impl Flow {
             return;
         }
         self.hold += dt;
+        self.side_secs += dt;
         self.credit = if on_verge {
             0.0
         } else {
@@ -93,9 +104,41 @@ mod tests {
         let p = ScoringParams::default();
         let (mut d, mut f) = (DriftDetector::default(), Flow::default());
         drive(&mut d, &mut f, &p, 45.0, 2.0, false);
+        let held = f.hold;
         drive(&mut d, &mut f, &p, -45.0, DT, false);
-        assert!((f.hold - p.flow.link_keep * p.flow.ramp_secs - DT).abs() < 1e-9);
+        let cap = p.flow.link_cap_secs.unwrap_or(p.flow.ramp_secs);
+        assert!((f.hold - p.flow.link_keep * held.min(cap) - DT).abs() < 1e-9);
         assert_eq!(f.sides, 2);
+    }
+
+    #[test]
+    fn a_side_too_short_to_judge_still_links() {
+        let p = ScoringParams::default();
+        let min = p.flow.link_min_hold_secs.expect("the default config links short sides");
+        assert!(min < p.drift.transition_min_hold_secs);
+        let (mut d, mut f) = (DriftDetector::default(), Flow::default());
+        drive(&mut d, &mut f, &p, 45.0, (min + p.drift.transition_min_hold_secs) / 2.0, false);
+        let held = f.hold;
+        let event = d.update(&p.drift, (-45.0f64).to_radians(), 15.0, true, DT);
+        assert_eq!(event, DriftEvent::Flick, "judging calls it a flick");
+        f.update(&p, event, d.active, 45.0, false, DT);
+        assert!((f.hold - p.flow.link_keep * held - DT).abs() < 1e-9, "flow links it");
+    }
+
+    #[test]
+    fn a_long_side_carries_its_bonus_over_a_link() {
+        let p = ScoringParams::default();
+        let (mut d, mut f) = (DriftDetector::default(), Flow::default());
+        drive(&mut d, &mut f, &p, 45.0, p.flow.bonus_secs, false);
+        drive(&mut d, &mut f, &p, -45.0, DT, false);
+        assert!(f.credit > 1.0, "the next side starts with bonus, not a ramp: {}", f.credit);
+
+        let mut old = p.clone();
+        old.flow.link_cap_secs = None;
+        let (mut d, mut f) = (DriftDetector::default(), Flow::default());
+        drive(&mut d, &mut f, &old, 45.0, p.flow.bonus_secs, false);
+        drive(&mut d, &mut f, &old, -45.0, DT, false);
+        assert!(f.credit < 1.0, "without a cap only the ramp crosses");
     }
 
     #[test]

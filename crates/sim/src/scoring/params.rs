@@ -112,8 +112,16 @@ pub struct FlowParams {
     pub bonus: f64,
     /// ...by this many seconds held.
     pub bonus_secs: f64,
-    /// Share of the ramp carried into the next side by a linked transition.
+    /// Share of the hold carried into the next side by a linked transition.
     pub link_keep: f64,
+    /// A side held this long links into the next, even when it's too short
+    /// to be judged a transition (missing: only judged transitions link).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_min_hold_secs: Option<f64>,
+    /// A link carries at most this much hold (missing: `ramp_secs`, so no
+    /// bonus crosses a link).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_cap_secs: Option<f64>,
 }
 
 impl Default for FlowParams {
@@ -228,6 +236,12 @@ mod tests {
         assert_eq!(p.angle.credit_from_deg, 0.0, "credit from the drift start, as before");
         assert!(!p.style.transition_scaled, "flat transition points, as before");
         assert_eq!(p.flow.ramp_secs, ScoringParams::default().flow.ramp_secs);
+
+        let mut old: toml::Table = toml::from_str(DEFAULT_SCORING_TOML).unwrap();
+        old["flow"].as_table_mut().unwrap().remove("link_min_hold_secs");
+        old["flow"].as_table_mut().unwrap().remove("link_cap_secs");
+        let p: ScoringParams = toml::from_str(&toml::to_string(&old).unwrap()).unwrap();
+        assert_eq!((p.flow.link_min_hold_secs, p.flow.link_cap_secs), (None, None), "only judged transitions link, as before");
     }
 
     #[test]

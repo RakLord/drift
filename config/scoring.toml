@@ -24,7 +24,11 @@ credit_from_deg = 20.0        # angle (and flow) credit starts here; smaller sli
 ramp_secs = 1.0               # 0 -> 1 over this long on one side...
 bonus = 0.5                   # ...then up to 1 + bonus...
 bonus_secs = 3.0              # ...by this long
-link_keep = 0.75              # share of the ramp a linked transition carries over
+link_keep = 0.75              # share of the hold a link carries over
+link_min_hold_secs = 0.75     # a side held this long links into the next (looser than
+                              # judging's transition_min_hold_secs)
+link_cap_secs = 3.0           # a link carries at most this much hold (up to bonus_secs
+                              # keeps the bonus across a link)
 
 [speed]
 # Multiplier on everything earned while drifting.
