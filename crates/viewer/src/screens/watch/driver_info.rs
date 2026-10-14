@@ -42,7 +42,7 @@ impl DriverInfo {
         ui.x = (view_w - WIDTH - 16.0).max(16.0);
         ui.begin("DRIVER", screen_height() - 140.0);
         ui.label(&r.label, theme::TEXT);
-        ui.label(&format!("island {}   genome {}", e.island, e.id), theme::TEXT_DIM);
+        ui.label(&format!("island {}   genome {}   network {}", e.island, e.id, r.shape), theme::TEXT_DIM);
         ui.label(&format!("fitness {:.0} (#{} this gen)   quality {:.2}", e.fitness, e.rank, e.drift_quality), theme::TEXT_DIM);
 
         let mut clicked = None;

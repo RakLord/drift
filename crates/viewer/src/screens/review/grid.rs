@@ -68,7 +68,7 @@ pub fn draw(camera: &mut FollowCamera, rect: Rect, mesh: &TrackMesh, racer: &Rac
     draw_rectangle(rect.x, rect.y, rect.w, LABEL + 8.0, theme::PANEL);
     let points = format!("{:.0} pts", racer.live_score());
     let points_w = measure_text(&points, None, LABEL as u16, 1.0).width;
-    let label = fit(&format!("{}  island {}", racer.label, racer.entry.island), rect.w - points_w - 20.0, LABEL);
+    let label = fit(&racer.label, rect.w - points_w - 20.0, LABEL);
     text(&label, rect.x + 6.0, rect.y + LABEL + 2.0, LABEL, if marks.picked { theme::NEON_PINK } else { theme::TEXT });
     text(&points, rect.x + rect.w - points_w - 6.0, rect.y + LABEL + 2.0, LABEL, theme::SODIUM);
 

@@ -355,6 +355,10 @@ impl WatchScreen {
             self.leaderboard.expanded = !self.leaderboard.expanded;
             self.leaderboard.open = true;
         }
+        if is_key_pressed(KeyCode::G) {
+            self.leaderboard.grouped = !self.leaderboard.grouped;
+            self.leaderboard.open = true;
+        }
         if is_key_pressed(KeyCode::F) && !self.racers.is_empty() {
             self.follow((self.followed + 1) % self.racers.len());
         }
@@ -571,7 +575,7 @@ impl WatchScreen {
                     self.track.def.name
                 ));
                 if let Some(r) = self.racers.get(self.followed) {
-                    parts.push(format!("following {} (island {})", r.label, r.entry.island));
+                    parts.push(format!("following {}", r.label));
                 }
                 if let Some(next) = &self.pending {
                     parts.push(format!("next heat: gen {}", next.header.generation));
@@ -589,7 +593,7 @@ impl WatchScreen {
             text(message, ((w - width) / 2.0).max(16.0), 170.0, 22.0, theme::NEON_CYAN);
         }
         let help = if self.show_help {
-            "F / click car or row: follow  Tab leaderboard details  D driver info  J replays  U review grid  R restart heat  L library track  N generated track  O leaderboard  M map  V network  I inputs  E effects  T telemetry  C run charts  [ ] speed  P pause  H help"
+            "F / click car or row: follow  Tab leaderboard details  G group by island  D driver info  J replays  U review grid  R restart heat  L library track  N generated track  O leaderboard  M map  V network  I inputs  E effects  T telemetry  C run charts  [ ] speed  P pause  H help"
         } else {
             "H: help"
         };

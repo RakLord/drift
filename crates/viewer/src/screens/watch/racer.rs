@@ -41,7 +41,13 @@ impl Controller for Driver {
 
 pub struct Racer {
     pub entry: TopEntry,
+    /// "island 3  top 5 #12": its island, why it's racing, its fitness rank.
     pub label: String,
+    /// The label without the island ("top 5 #12"), for rows under an
+    /// island heading.
+    pub why: String,
+    /// Its network shape, e.g. "111-48t-5".
+    pub shape: String,
     episode: Episode,
     driver: Driver,
     pub skids: SkidMarks,
@@ -57,9 +63,10 @@ impl Racer {
         let episode = Episode::new(track, header.car.clone(), header.scoring.clone(), header.episode.clone(), seed);
         let s = &episode.world.car.state;
         let previous = (s.position, s.heading);
-        let tag = if entry.drifter { " drifter" } else { "" };
-        let label = format!("#{} {}{tag}", entry.rank, genome.header.spec.describe());
-        Self { entry, label, episode, driver, skids: SkidMarks::new(), previous, end: None }
+        let why = format!("{} #{}", reason(&entry, header), entry.rank);
+        let label = format!("island {}  {why}", entry.island);
+        let shape = genome.header.spec.describe();
+        Self { entry, label, why, shape, episode, driver, skids: SkidMarks::new(), previous, end: None }
     }
 
     /// One sim tick (nothing once the run has ended).
@@ -105,4 +112,15 @@ impl Racer {
     pub fn last_decision(&self) -> (Option<&Observation>, u64) {
         (self.driver.last.as_ref(), self.driver.decisions)
     }
+}
+
+/// Why it's racing: "drift pick" (picked for drift quality), else "top k"
+/// (one of its island's k fittest; k counted from the file, as the
+/// trainer's `per_island` isn't written into it).
+fn reason(entry: &TopEntry, header: &TopHeader) -> String {
+    if entry.drifter {
+        return "drift pick".to_owned();
+    }
+    let k = header.entries.iter().filter(|e| e.island == entry.island && !e.drifter).count();
+    format!("top {k}")
 }
