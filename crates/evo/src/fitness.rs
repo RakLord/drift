@@ -542,6 +542,8 @@ mod tests {
             immigrants: 2,
             migration_every: 10,
             migration_gap: 0.8,
+            migrants: 0,
+            migration_window: 1,
             selection: crate::Selection::Pareto,
             reseed_fraction: 0.3,
             reseed_sigma: 0.3,

@@ -158,6 +158,19 @@ impl TrainingConfig {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn configs_without_the_run11_migration_keys_keep_the_old_rule() {
+        let old: String = super::DEFAULT_TRAINING_TOML
+            .lines()
+            .filter(|l| !l.starts_with("migrants") && !l.starts_with("migration_window"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let c: super::TrainingConfig = toml::from_str(&old).unwrap();
+        assert_eq!((c.ga.migrants, c.ga.migration_window), (0, 1), "full copies, judged on one generation");
+        let new = super::TrainingConfig::default();
+        assert_eq!((new.ga.migrants, new.ga.migration_window), (5, 25));
+    }
+
+    #[test]
     fn default_config_parses() {
         let c = super::TrainingConfig::default();
         assert!(!c.islands.is_empty() && !c.curriculum.is_empty());

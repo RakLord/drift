@@ -28,7 +28,7 @@ use agent::replay_file::{self, Replay, ReplayHeader};
 use agent::top_file::{self, TopEntry, TopGenomes, TopHeader, TrainingSummary};
 use common::Rng;
 use common::paths::workspace_path;
-use evo::{Curriculum, Ids, Island, Stage, migrate};
+use evo::{Curriculum, Ids, Island, Migration, Stage, migrate};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sim::car::CarParams;
@@ -454,6 +454,7 @@ fn run(args: Args) -> Result<(), String> {
         for (island, island_results) in pop.islands.iter_mut().zip(&results) {
             island.fitness = island_results.iter().map(|runs| stage.fitness(runs)).collect();
             island.objectives = island_results.iter().map(|runs| stage.objectives(runs)).collect();
+            island.record_best(ga.migration_window);
         }
         let saved = pick_saved(&pop.islands, &results, &cfg, &generator, &spare, generation, &stage, &stage_env)?;
         let best_island = &pop.islands[saved.island];
@@ -507,8 +508,16 @@ fn run(args: Args) -> Result<(), String> {
         pop.protected.retain(|p| p.until > generation + 1);
         let protected_ids: Vec<u64> = pop.protected.iter().map(|p| p.id).collect();
         let migration_due = ga.migration_every > 0 && generation > 0 && generation % ga.migration_every == 0;
-        if migration_due && let Some((from, to)) = migrate(&mut pop.islands, &ga, &mut pop.ids, &protected_ids) {
-            println!("== island {to} replaced by a copy of island {from} ({})", pop.islands[to].spec.describe());
+        if migration_due {
+            match migrate(&mut pop.islands, &ga, &mut pop.ids, &protected_ids) {
+                Some(Migration::Replaced { from, to }) => {
+                    println!("== island {to} replaced by a copy of island {from} ({})", pop.islands[to].spec.describe());
+                }
+                Some(Migration::Sent { from, to, count }) => {
+                    println!("== island {to} took {count} migrants from island {from} ({})", pop.islands[to].spec.describe());
+                }
+                None => {}
+            }
         }
         let new_picks = picks::take(&run_dir, &pop.islands, generation);
         for pick in &new_picks {

@@ -41,6 +41,7 @@ A top-down 2D drift sim where cars are driven by small neural networks trained w
 - Done: run8 prep (after run7): three Pareto objectives (driving, flow, judged score), a smoothness penalty on sawing the throttle and steering, and stricter judging against jiggles (angle credit from 20°, drifts under 1 s bank nothing, transitions need 1.5 s sides and pay by the angle held). See *Training* and *Scoring*.
 - Done: steering as a rate for new runs (`[episode] steering`, see *Outputs*): the dash wheel showed run8 sawing its steer request ~4 times a second. Old runs keep position steering.
 - Next: Generate tab (see *Tracks › Track manager*).
+- Done: run11 prep (after run10): gentler island migration, same-shape islands swap a few top genomes and full copies are judged on a rolling mean (`[ga] migrants`, `migration_window`). See *Training › Islands*. Old runs keep the old rule.
 - Then: M3's features are in; what's left is user-led training to get cars drifting through drive -> slide -> judged (and, once judged works, polishing).
 
 **In progress: M4** (network view and run dashboard already done)
@@ -269,7 +270,12 @@ Outputs are produced once per decision and held until the next one.
   2. Aggregate fitness across the tracks.
   3. Elites survive unchanged.
   4. The rest are bred via tournament selection, crossover and mutation.
-- **Islands:** several sub-populations, each with its own network shape and activation functions. Breeding happens within an island only. Periodically the worst island is replaced with a copy of the best.
+- **Islands:** several sub-populations, each with its own network shape and activation functions. Breeding happens within an island only. Every `migration_every` (25) gens, islands are compared on their best fitness averaged over the last `migration_window` (25) gens, and the weakest one either:
+  - **has the strongest's shape:** the strongest's top `migrants` (5) genomes replace its worst, with fresh ids, their source as parent, and their fitness carried over (every island ran the same tracks). No gap needed, so ideas flow between lineages every interval. Protected human picks are never overwritten.
+  - **has a different shape:** it's replaced by a copy of the strongest, shape and all, if it's below `migration_gap` of the best (an island holding a pick is skipped for the next-weakest).
+  - Nothing happens until every island has a full window; the window isn't checkpointed, so it starts empty on `--resume`. `train.log` prints `== island N replaced by a copy of island M` or `== island N took 5 migrants from island M`.
+  - Old run configs without the keys get `migrants = 0`, `migration_window = 1`: always a full copy, on one generation's best (the rule up to run10).
+  - **Why:** run9 and run10 both collapsed to one shape (`111-48t-5`), and all four islands became copies of one lineage. Run10 did this within about 9 migrations. The old check used a single generation's best, which swings with the tracks drawn, so a lucky draw can wipe an island. Keeping 20% of a replaced island was considered and dropped: the fitter newcomers would likely out-breed the locals within a few gens.
 - **Crossover:** neuron-level (a child takes each hidden neuron's whole incoming weight set from one parent).
 - **Mutation:** Gaussian noise on a random subset of weights, plus a rare large reset. σ shrinks over time or self-adapts per genome.
 - **Fitness (shaped from gen 0):** driving reward × (1 + drift_bonus × drift quality).
