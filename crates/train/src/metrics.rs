@@ -101,6 +101,14 @@ pub struct Report {
     /// The saved driver's judged objective (weighted judged score less
     /// penalties, after the pedal penalties) on its training runs.
     pub best_judged: f64,
+    /// Share of the clips driven past that paid, over all of the saved
+    /// driver's runs and over the population's.
+    pub best_clip_rate: f64,
+    pub mean_clip_rate: f64,
+    /// The saved driver's average |drift angle| (deg) and throttle when
+    /// drawing level with a clip, drifting or not.
+    pub best_clip_angle: f64,
+    pub best_clip_throttle: f64,
     /// Best genome on the library tracks, when tested this generation.
     pub test_fitness: Option<f64>,
     pub test_laps: Option<f64>,
@@ -161,6 +169,16 @@ impl Report {
             (mean(rates.iter().map(|r| r.0)), mean(rates.iter().map(|r| r.1)))
         };
         let drifting_runs: Vec<&EpisodeResult> = drifting.iter().map(|r| **r).collect();
+        // Pooled over the runs, so runs past no clips don't count.
+        let clip_rate = |runs: &[&EpisodeResult]| {
+            let hit: u32 = runs.iter().map(|r| r.stats.clips).sum();
+            let missed: u32 = runs.iter().map(|r| r.stats.clips_missed).sum();
+            if hit + missed > 0 { f64::from(hit) / f64::from(hit + missed) } else { 0.0 }
+        };
+        let best_passes: u32 = best_runs.iter().map(|r| r.stats.clip_passes).sum();
+        let per_pass = |f: fn(&EpisodeResult) -> f64| {
+            if best_passes > 0 { best_runs.iter().map(|r| f(r)).sum::<f64>() / f64::from(best_passes) } else { 0.0 }
+        };
         let mut ends = [0.0; 6];
         for r in &all {
             let k = EndReason::ALL.iter().position(|&e| e == r.end).unwrap_or(0);
@@ -213,6 +231,10 @@ impl Report {
             best_saws: saws(&best_runs),
             mean_saws: saws(&drifting_runs),
             best_judged: islands.get(saved.island).and_then(|i| i.objectives.get(saved.genome)).map_or(0.0, |o| o[2]),
+            best_clip_rate: clip_rate(&best_runs),
+            mean_clip_rate: clip_rate(&all),
+            best_clip_angle: per_pass(|r| r.stats.clip_angle_sum),
+            best_clip_throttle: per_pass(|r| r.stats.clip_throttle_sum),
             test_fitness: None,
             test_laps: None,
         }
@@ -221,7 +243,7 @@ impl Report {
     /// What the console columns mean; printed once at the start.
     pub fn legend() -> &'static str {
         "drift q = flow (1.0 = a full-angle drift, each side held 1 s+, the whole run; flicks earn little). side = seconds per drift side. top = the most drift-y genome, \
-         saved = the driver written to best.genome (fitness over all its runs; # = its fitness rank this generation). score = banked judged points. angle = typical biggest angle per run. \
+         saved = the driver written to best.genome (fitness over all its runs; clip = share of the clips it drove past that paid; # = its fitness rank this generation). score = banked judged points. angle = typical biggest angle per run. \
          saws = the saved driver's quick throttle / steer back-and-forths per second drifting. \
          ends: T time up, NP no progress, CR crashed, ST stalled, SP spun, BK backwards"
     }
@@ -229,8 +251,8 @@ impl Report {
     /// Column headings; printed at the start and every so often.
     pub fn header() -> String {
         [
-            "  gen stage │ ── top drifter ────────────────── │ ── saved best ──────────── │ ── population ────────────────── │ ends %            │ pedals %             │ saws/s    │",
-            "            │ drift q  angle  side  score  laps │ fitness drift q  laps    # │ drift q  >20°  angle spins  bdiv │  T NP CR ST SP BK │  hb clutch slip hold │ thr steer │ secs",
+            "  gen stage │ ── top drifter ────────────────── │ ── saved best ────────────────── │ ── population ────────────────── │ ends %            │ pedals %             │ saws/s    │",
+            "            │ drift q  angle  side  score  laps │ fitness drift q  laps  clip    # │ drift q  >20°  angle spins  bdiv │  T NP CR ST SP BK │  hb clutch slip hold │ thr steer │ secs",
         ]
         .join("\n")
     }
@@ -248,7 +270,7 @@ impl Report {
             test += &format!("  [{} replays]", self.replays);
         }
         format!(
-            "{:>5} {:<6}│   {:>5.2} {:>5.0}° {:>4.1}s {:>6.0} {:>5.2} │ {:>7.0}   {:>5.2} {:>5.2} {:>4} │   {:>5.2} {:>4.0}% {:>5.0}° {:>5.1} {:>5.3} │ {} {} {} {} {} {} │ {:>3.0} {:>6.0} {:>4.0} {:>4.0} │ {:>3.1} {:>5.1} │ {:>4.1}{test}",
+            "{:>5} {:<6}│   {:>5.2} {:>5.0}° {:>4.1}s {:>6.0} {:>5.2} │ {:>7.0}   {:>5.2} {:>5.2} {:>4.0}% {:>4} │   {:>5.2} {:>4.0}% {:>5.0}° {:>5.1} {:>5.3} │ {} {} {} {} {} {} │ {:>3.0} {:>6.0} {:>4.0} {:>4.0} │ {:>3.1} {:>5.1} │ {:>4.1}{test}",
             self.generation,
             self.stage,
             self.top_quality,
@@ -259,6 +281,7 @@ impl Report {
             self.saved_fitness,
             self.best_quality,
             self.best_laps,
+            self.best_clip_rate * 100.0,
             self.saved_rank,
             self.mean_quality,
             self.above_20_share * 100.0,
@@ -380,6 +403,10 @@ impl Report {
             ("mean_throttle_saws", self.mean_saws.0),
             ("mean_steer_saws", self.mean_saws.1),
             ("best_judged", self.best_judged),
+            ("best_clip_rate", self.best_clip_rate),
+            ("mean_clip_rate", self.mean_clip_rate),
+            ("best_clip_angle", self.best_clip_angle),
+            ("best_clip_throttle", self.best_clip_throttle),
         ] {
             num(name, v);
         }

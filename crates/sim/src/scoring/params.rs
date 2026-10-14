@@ -67,6 +67,11 @@ pub struct LineParams {
     pub clip_zero_beyond: f64,
     pub clip_window_before: f64,
     pub clip_window_after: f64,
+    /// Scale clip points by the angle points' shape at the closest approach,
+    /// so straightening up at the clip earns nothing (false in older files:
+    /// proximity only).
+    #[serde(default)]
+    pub clip_angle_scaled: bool,
     pub outer_points_per_sec: f64,
     pub outer_full_within: f64,
     pub outer_zero_beyond: f64,
@@ -230,11 +235,13 @@ mod tests {
         old["drift"].as_table_mut().unwrap().remove("min_bank_secs");
         old["angle"].as_table_mut().unwrap().remove("credit_from_deg");
         old["style"].as_table_mut().unwrap().remove("transition_scaled");
+        old["line"].as_table_mut().unwrap().remove("clip_angle_scaled");
         let p: ScoringParams = toml::from_str(&toml::to_string(&old).unwrap()).unwrap();
         assert_eq!(p.drift.transition_min_hold_secs, 0.0, "every switch is a transition, as before");
         assert_eq!(p.drift.min_bank_secs, 0.0, "every drift banks, as before");
         assert_eq!(p.angle.credit_from_deg, 0.0, "credit from the drift start, as before");
         assert!(!p.style.transition_scaled, "flat transition points, as before");
+        assert!(!p.line.clip_angle_scaled, "clips pay on proximity only, as before");
         assert_eq!(p.flow.ramp_secs, ScoringParams::default().flow.ramp_secs);
 
         let mut old: toml::Table = toml::from_str(DEFAULT_SCORING_TOML).unwrap();

@@ -132,6 +132,49 @@ fn clip_pays_once_by_front_bumper_proximity() {
 }
 
 #[test]
+fn clips_pay_by_angle_and_misses_are_counted() {
+    let clip = || vec![ZoneDef::Clip { at: 0.5, side: Side::Left }];
+    let close = 6.0 - 0.3 - 1.85;
+    // (clip events, missed events, line points / quality, passes, angle at the pass)
+    let run = |params: ScoringParams, y: f64, angle: f64| {
+        let mut rig = Rig::with(params, clip());
+        rig.slide(y, angle, 9.0);
+        let quality = rig.events.iter().find_map(|e| match e {
+            ScoreEventKind::Clip { quality } => Some(*quality),
+            _ => None,
+        });
+        let per_quality = quality.map_or(0.0, |q| rig.scorer.combo.pending.line / q);
+        let passes = rig.scorer.clip_passes;
+        (
+            rig.count(|e| matches!(e, ScoreEventKind::Clip { .. })),
+            rig.count(|e| *e == ScoreEventKind::ClipMissed),
+            per_quality,
+            passes.count,
+            passes.angle_sum,
+        )
+    };
+    let scaled = ScoringParams::default();
+    assert!(scaled.line.clip_angle_scaled, "on in config/scoring.toml");
+
+    let (hits, misses, half, passes, angle) = run(scaled.clone(), close, 30.0);
+    assert_eq!((hits, misses, passes), (1, 0, 1));
+    assert!((angle - 30.0).abs() < 1.0, "angle at the pass {angle}");
+    let (_, _, full, ..) = run(scaled.clone(), close, 50.0);
+    println!("clip points per quality: 30 deg {half:.0}, 50 deg {full:.0}");
+    assert!((half / full - 0.5).abs() < 0.01, "30 deg is halfway up the 20-40 deg ramp");
+
+    let (hits, misses, ..) = run(scaled.clone(), close, 15.0);
+    assert_eq!((hits, misses), (0, 1), "drifting, but under the angle credit floor: a miss");
+    let (hits, misses, ..) = run(scaled.clone(), -2.0, 30.0);
+    assert_eq!((hits, misses), (0, 1), "too wide: a miss");
+
+    let mut flat = scaled;
+    flat.line.clip_angle_scaled = false;
+    let (hits, misses, ..) = run(flat, close, 15.0);
+    assert_eq!((hits, misses), (1, 0), "older files: proximity only");
+}
+
+#[test]
 fn wall_taps_are_capped_per_combo_and_rate_limited() {
     let mut rig = Rig::new(vec![]);
     let params = ScoringParams::default().style;

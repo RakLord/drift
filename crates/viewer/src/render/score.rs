@@ -98,7 +98,7 @@ impl ScoreHud {
 fn describe(e: &ScoreEvent) -> Option<(String, Color)> {
     let pts = format_points(e.points.abs());
     Some(match e.kind {
-        ScoreEventKind::DriftStart => return None,
+        ScoreEventKind::DriftStart | ScoreEventKind::ClipMissed => return None,
         ScoreEventKind::Clip { quality } if quality > 0.95 => (format!("PERFECT CLIP +{pts}"), theme::SODIUM),
         ScoreEventKind::Clip { .. } => (format!("CLIP +{pts}"), theme::SODIUM),
         ScoreEventKind::ZoneEnter => ("OUTER ZONE".to_owned(), theme::NEON_PINK),

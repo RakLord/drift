@@ -328,6 +328,7 @@ fn event_code(kind: ScoreEventKind) -> (u8, f64) {
         ScoreEventKind::Banked => (6, 0.0),
         ScoreEventKind::Spin => (7, 0.0),
         ScoreEventKind::HardHit => (8, 0.0),
+        ScoreEventKind::ClipMissed => (9, 0.0),
     }
 }
 
@@ -342,6 +343,7 @@ fn event_kind(code: u8, quality: f64) -> Option<ScoreEventKind> {
         6 => ScoreEventKind::Banked,
         7 => ScoreEventKind::Spin,
         8 => ScoreEventKind::HardHit,
+        9 => ScoreEventKind::ClipMissed,
         _ => return None,
     })
 }

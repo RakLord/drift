@@ -50,6 +50,9 @@ pub struct Stage {
     /// Cost of sawing the throttle or steering while drifting (none = free).
     #[serde(default)]
     pub smoothness: Option<SmoothnessPenalty>,
+    /// Cost of missing clips (none = free).
+    #[serde(default)]
+    pub clips: Option<ClipRate>,
     /// Softer rules while learning to drift (none = the real rules).
     #[serde(default)]
     pub shaping: Option<Shaping>,
@@ -129,6 +132,25 @@ impl SmoothnessPenalty {
     pub fn factor(&self, r: &EpisodeResult) -> f64 {
         let (throttle, steer) = Self::rates(r);
         (1.0 - self.throttle * throttle - self.steer * steer).max(0.0)
+    }
+}
+
+/// Missing clips scales the judged points by `min(1, hit rate / target)`,
+/// where the hit rate is the share of the clips driven past that paid. A run
+/// that passed no clips (a track without any, or an early end) keeps them all.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClipRate {
+    pub target: f64,
+}
+
+impl ClipRate {
+    /// Share of the run's judged points it keeps.
+    pub fn factor(&self, r: &EpisodeResult) -> f64 {
+        match r.stats.clip_rate() {
+            Some(rate) if self.target > 0.0 => (rate / self.target).min(1.0),
+            _ => 1.0,
+        }
     }
 }
 
@@ -233,10 +255,16 @@ impl Stage {
         self.smoothness.as_ref().map_or(1.0, |s| s.factor(r))
     }
 
-    /// The judged score's categories, weighted (before any pedal penalty).
+    /// Share of a run's judged points kept after the clip penalty (1 = none).
+    pub fn clip_factor(&self, r: &EpisodeResult) -> f64 {
+        self.clips.as_ref().map_or(1.0, |c| c.factor(r))
+    }
+
+    /// The judged score's categories, weighted and cut by the clip penalty
+    /// (before any pedal penalty).
     fn judged_points(&self, r: &EpisodeResult) -> f64 {
         let s = &r.score;
-        self.line * s.line + self.angle * s.angle + self.style * s.style
+        (self.line * s.line + self.angle * s.angle + self.style * s.style) * self.clip_factor(r)
     }
 
     fn run_fitness(&self, r: &EpisodeResult) -> f64 {
@@ -256,7 +284,8 @@ impl Stage {
     /// driving (progress / staying alive), drifting (drift quality) and the
     /// judged score (weighted categories less penalties; 0 while a stage
     /// gives them no weight). All are cut by the clutch penalty; the last
-    /// two by the smoothness penalty too.
+    /// two by the smoothness penalty too, and the judged score by missed
+    /// clips.
     pub fn objectives(&self, results: &[EpisodeResult]) -> Objectives {
         [
             mean(results, |r| self.base(r) * self.clutch_factor(r)),
@@ -370,6 +399,7 @@ mod tests {
             penalty: 1.0,
             clutch: None,
             smoothness: None,
+            clips: None,
             shaping: None,
             advance,
             polish: None,
@@ -536,6 +566,23 @@ mod tests {
         let s = stage(1.0, 2.0, None);
         let f = s.fitness(&[result(100.0, 10.0, 0.0), result(300.0, 0.0, 50.0)]);
         assert_eq!(f, ((100.0 + 20.0) + (300.0 - 50.0)) / 2.0);
+    }
+
+    #[test]
+    fn missed_clips_cut_the_judged_points() {
+        let s = Stage { penalty: 0.0, clips: Some(ClipRate { target: 0.6 }), ..stage(0.0, 1.0, None) };
+        let mut r = result(0.0, 1000.0, 0.0);
+        (r.stats.clips, r.stats.clips_missed) = (3, 7);
+        assert!((s.fitness(&[r]) - 500.0).abs() < 1e-9, "30% hit against a 60% target keeps half");
+        assert!((s.objectives(&[r])[2] - 500.0).abs() < 1e-9);
+        (r.stats.clips, r.stats.clips_missed) = (8, 2);
+        assert_eq!(s.fitness(&[r]), 1000.0, "above the target keeps everything");
+        (r.stats.clips, r.stats.clips_missed) = (0, 0);
+        assert_eq!(s.fitness(&[r]), 1000.0, "no clips passed: nothing to judge");
+        (r.stats.clips, r.stats.clips_missed) = (0, 5);
+        assert_eq!(s.fitness(&[r]), 0.0);
+        let free = Stage { penalty: 0.0, ..stage(0.0, 1.0, None) };
+        assert_eq!(free.fitness(&[r]), 1000.0, "no clips key: free");
     }
 
     #[test]

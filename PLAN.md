@@ -201,6 +201,8 @@ All numbers live in `config/scoring.toml` (hot-reloaded).
 
 - **Zones** sit in the track file, positioned in section coordinates (anchor index + fraction), so they stay with their corner when anchors move.
   - **Clip point** (inside edge): scored on the **front bumper**'s closest approach while drifting. Pays out once per lap.
+    - With `clip_angle_scaled` (on in `config/scoring.toml`, off in older files) the points are also × the angle points' shape at that closest approach, so a clip taken under 20° pays nothing. Why: run9's judged drivers lifted and straightened up at the clips and still got full clip points.
+    - Driving forwards out of a clip's window without it paying is a `ClipMissed` event (too wide, not drifting, under 20°, or no combo). Episodes count hits and misses, plus the drift angle and throttle each time the car draws level with a clip.
   - **Outer zone** (outside edge): scored on the **rear bumper**'s proximity to the edge, per second, while drifting through it.
 - **Drifting:** angle ≥ 12°, speed ≥ 25 km/h, moving forwards along the track. The drift ends after 0.3 s below 8° (a clean exit). Over 100° is a spin.
 - **Points per second while drifting**, × a speed multiplier (0.5× at 30 km/h → 1.5× at 100 km/h):
@@ -292,6 +294,8 @@ Outputs are produced once per decision and held until the next one.
   - Weights: slide 0.08 / 0.01, judged 0.15 / 0.02. Steering is cheap on purpose: the car has no self-steer, so catching a slide takes real steering.
   - Logged as `best_/mean_throttle_saws`, `best_/mean_steer_saws` and the console's `saws/s` columns.
   - Why: run7's gen-3290 best sawed the throttle ~0.8–2.5 and the steering ~7–16 times a second while drifting.
+- **Clip rate (`clips = { target }` per stage, judged in the defaults at 0.6):** the judged points (in fitness and the judged objective) are × min(1, clip hit rate ÷ target), where the hit rate is the share of the clips driven past that paid. A run past no clips keeps everything. Logged as `best_/mean_clip_rate`, `best_clip_angle`, `best_clip_throttle` and the console's `clip` column (a resumed run keeps its CSV's old columns, so these only appear in new runs).
+  - Why: run9's judged stage stalled from gen ~2600 hitting roughly 10–25% of the clips, while line points were already over half its judged score.
 - **Selection:** Pareto ranking over (driving, drift quality, judged score) inside each island, so slidey crashers survive alongside grip drivers. The judged score (line/angle/style weighted, less penalty) only became an objective after run7: until then the judged stage's weights only fed `fitness` (saved best, logs), so judged points never chose who bred. Logged as `best_judged`.
 - **Stage change:** σ resets and 30% of each island is reseeded with heavily mutated copies of its best.
 - **Starting priors:** calm start (straight, some throttle, brake off, handbrake/clutch light).

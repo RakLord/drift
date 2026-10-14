@@ -184,3 +184,4 @@ style = 1.0
 penalty = 0.5
 clutch = { strength = 2.0, calm_weight = 0.25 }
 smoothness = { throttle = 0.15, steer = 0.02 }  # run7's gen-3290 best would keep ~0.3-0.6
+clips = { target = 0.6 }  # judged points x min(1, clip hit rate / target): run9 hit ~10-25% and straightened up at the clips

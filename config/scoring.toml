@@ -43,6 +43,7 @@ clip_full_within = 0.5        # metres from the front bumper to the clip point
 clip_zero_beyond = 4.0
 clip_window_before = 15.0     # metres of track before the clip where approach counts
 clip_window_after = 3.0
+clip_angle_scaled = true      # clip points x the angle points' shape at the closest approach: straightening up at the clip earns nothing (under 20 deg = a miss)
 outer_points_per_sec = 300.0  # scaled by rear bumper proximity to the edge
 outer_full_within = 0.5
 outer_zero_beyond = 4.0

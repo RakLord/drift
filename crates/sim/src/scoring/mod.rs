@@ -29,6 +29,9 @@ pub enum ScoreEventKind {
     DriftStart,
     /// `quality` 0..1: how close the front bumper got.
     Clip { quality: f64 },
+    /// Drove forwards past a clip without it paying (too wide, not drifting,
+    /// under the angle credit floor with `clip_angle_scaled`, or no combo).
+    ClipMissed,
     ZoneEnter,
     Transition,
     WallTap,
@@ -48,10 +51,24 @@ pub struct ScoreEvent {
 #[derive(Clone, Debug, Default)]
 struct ClipState {
     in_window: bool,
-    /// Closest the front bumper got during this approach, metres.
+    /// Closest the front bumper got during this approach, metres...
     best: Option<f64>,
+    /// ...and the drift angle then, degrees.
+    best_angle: f64,
     /// Lap on which this clip last paid out.
     paid_lap: Option<i64>,
+    /// Signed distance past the clip on the last tick, to spot passing it.
+    last_delta: Option<f64>,
+}
+
+/// How the car passes clips, drifting or not (for training metrics).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ClipPasses {
+    pub count: u32,
+    /// Sums over passes of |drift angle| (degrees) and throttle (0..1) on
+    /// the tick the car drew level with the clip.
+    pub angle_sum: f64,
+    pub throttle_sum: f64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -92,6 +109,7 @@ pub struct Scorer {
     pub total: Breakdown,
     /// Per track zone: is it being scored right now (for rendering).
     pub zone_lit: Vec<bool>,
+    pub clip_passes: ClipPasses,
     events: Vec<ScoreEvent>,
     clips: Vec<ClipState>,
     outers: Vec<OuterState>,
@@ -111,6 +129,7 @@ impl Scorer {
             combo: Combo::default(),
             total: Breakdown::default(),
             zone_lit: vec![false; zones],
+            clip_passes: ClipPasses::default(),
             events: vec![],
             clips: vec![ClipState::default(); zones],
             outers: vec![OuterState::default(); zones],
@@ -181,7 +200,7 @@ impl Scorer {
             self.check_wall_taps(world, contacts, speed_mult);
             self.check_bobble(deg, dt);
         }
-        self.update_zones(world, scoring, speed_mult, dt);
+        self.update_zones(world, scoring, angle.abs().to_degrees(), speed_mult, dt);
         &self.events
     }
 
@@ -273,7 +292,8 @@ impl Scorer {
         }
     }
 
-    fn update_zones(&mut self, world: &World, scoring: bool, speed_mult: f64, dt: f64) {
+    /// `angle`: |drift angle| this tick, degrees.
+    fn update_zones(&mut self, world: &World, scoring: bool, angle: f64, speed_mult: f64, dt: f64) {
         let track = world.track.clone();
         let lap_of = |start: f64| ((world.progress - start) / track.length).floor() as i64;
         for (i, zone) in track.zones.iter().enumerate() {
@@ -311,26 +331,49 @@ impl Scorer {
                     let state = &mut self.clips[i];
                     if in_window && scoring {
                         let distance = front_distance_to(world, zone.point);
-                        state.best = Some(state.best.map_or(distance, |b: f64| b.min(distance)));
+                        if state.best.is_none_or(|b| distance < b) {
+                            state.best = Some(distance);
+                            state.best_angle = angle;
+                        }
                     }
+                    if in_window && state.last_delta.is_some_and(|last| last < 0.0) && delta >= 0.0 {
+                        let passes = &mut self.clip_passes;
+                        passes.count += 1;
+                        passes.angle_sum += angle;
+                        passes.throttle_sum += world.car.state.controls.throttle;
+                    }
+                    state.last_delta = Some(delta);
                     let left_window = state.in_window && !in_window;
                     state.in_window = in_window;
                     self.zone_lit[i] = in_window && scoring;
                     if left_window {
                         let best = state.best.take();
                         let lap = lap_of(zone.start);
+                        let paid_this_lap = state.paid_lap == Some(lap);
+                        let mut paid = false;
                         if let Some(best) = best
-                            && state.paid_lap != Some(lap)
+                            && !paid_this_lap
                             && self.combo.active
                         {
                             let quality = proximity(best, line.clip_full_within, line.clip_zero_beyond);
-                            if quality > 0.0 {
+                            let angle_factor = if line.clip_angle_scaled {
+                                self.params.angle.factor(state.best_angle, self.params.drift.start_angle_deg)
+                            } else {
+                                1.0
+                            };
+                            if quality * angle_factor > 0.0 {
+                                paid = true;
                                 state.paid_lap = Some(lap);
-                                let points = line.clip_points * quality * speed_mult;
+                                let points = line.clip_points * quality * angle_factor * speed_mult;
                                 self.combo.pending.line += points;
                                 self.combo.bump(&self.params.combo);
                                 self.emit(ScoreEventKind::Clip { quality }, points);
                             }
+                        }
+                        // Left forwards (not backing out the way it came),
+                        // and not already paid this lap: a miss.
+                        if !paid && !paid_this_lap && delta > 0.0 {
+                            self.emit(ScoreEventKind::ClipMissed, 0.0);
                         }
                     }
                 }

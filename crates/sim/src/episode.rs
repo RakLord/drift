@@ -150,12 +150,37 @@ pub struct EpisodeStats {
     pub throttle_saws: u32,
     #[serde(default)]
     pub steer_saws: u32,
+    /// Clips driven past forwards without paying (see
+    /// `ScoreEventKind::ClipMissed`); `clips` counts the ones that paid.
+    #[serde(default)]
+    pub clips_missed: u32,
+    /// Times the car drew level with a clip, drifting or not, with the sums
+    /// of |drift angle| (degrees) and throttle (0..1) at those moments.
+    #[serde(default)]
+    pub clip_passes: u32,
+    #[serde(default)]
+    pub clip_angle_sum: f64,
+    #[serde(default)]
+    pub clip_throttle_sum: f64,
 }
 
 impl EpisodeStats {
     /// Average drift angle while drifting, degrees.
     pub fn average_angle(&self) -> f64 {
         if self.drift_time > 0.0 { self.angle_seconds / self.drift_time } else { 0.0 }
+    }
+
+    /// Share of the clips driven past that paid (None if it passed none).
+    pub fn clip_rate(&self) -> Option<f64> {
+        let passed = self.clips + self.clips_missed;
+        (passed > 0).then(|| f64::from(self.clips) / f64::from(passed))
+    }
+
+    /// Average |drift angle| (degrees) and throttle when drawing level with
+    /// a clip (None if it passed none).
+    pub fn clip_angle_and_throttle(&self) -> Option<(f64, f64)> {
+        let n = f64::from(self.clip_passes);
+        (self.clip_passes > 0).then(|| (self.clip_angle_sum / n, self.clip_throttle_sum / n))
     }
 
     /// Average seconds each side of a drift was held.
@@ -331,6 +356,7 @@ impl Episode {
             match e.kind {
                 ScoreEventKind::ZoneEnter => stats.zones_entered += 1,
                 ScoreEventKind::Clip { .. } => stats.clips += 1,
+                ScoreEventKind::ClipMissed => stats.clips_missed += 1,
                 ScoreEventKind::Transition => stats.transitions += 1,
                 ScoreEventKind::WallTap => stats.wall_taps += 1,
                 ScoreEventKind::HardHit => stats.hard_hits += 1,
@@ -338,6 +364,8 @@ impl Episode {
                 _ => {}
             }
         }
+        let passes = self.scorer.clip_passes;
+        (stats.clip_passes, stats.clip_angle_sum, stats.clip_throttle_sum) = (passes.count, passes.angle_sum, passes.throttle_sum);
         let car = &self.world.car;
         let controls = car.state.controls;
         if controls.handbrake > car.params.brakes.handbrake_free_play {
