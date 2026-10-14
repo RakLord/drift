@@ -1,6 +1,6 @@
 # Drift AI — Plan
 
-A top-down 2D drift game where cars are driven by small neural networks trained with a genetic algorithm (neuroevolution). Mostly our own code: physics, NN, and GA are written from scratch.
+A top-down 2D drift sim where cars are driven by small neural networks trained with a genetic algorithm (neuroevolution). Mostly our own code: physics, NN, and GA are written from scratch.
 
 ## Status
 
@@ -85,7 +85,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 
 ## Base concepts
 
-- **Game:** drift a car around a judged course. Points only while drifting. Scoring follows Formula Drift judging: **Line** (clip points / zones), **Angle**, **Style**, with speed as a multiplier.
+- **Sim:** drift a car around a judged course. Points only while drifting. Scoring follows Formula Drift judging: **Line** (clip points / zones), **Angle**, **Style**, with speed as a multiplier.
 - **Combo:** points build up during a drift and are banked only on a clean exit. Spin-outs and hard wall hits lose the combo and add a penalty.
 - **Wall taps:** a light, controlled rear-bumper tap on a hard wall (e.g. in an outer zone) earns a **Style bonus**. This is JDM drift.
 - **Driver prep:** before a run, the track is analysed into a list of corners. While driving, the car "knows" the next few corners before it can see them, so it can pre-plan entries.
@@ -493,7 +493,7 @@ drift/
 ## Milestones
 
 1. **M0:** car physics, gamepad driving, telemetry overlays, basic smoke + skid marks. **Must pass the physics validation gate before M2**
-2. **M1:** Bezier tracks + generator, zones, scoring, driver prep, HUD. A playable game
+2. **M1:** Bezier tracks + generator, zones, scoring, driver prep, HUD. Drivable by hand
 3. **M2:** `nn` + `evo` (islands) + headless trainer + per-generation CSV metrics; learn to drive laps
 4. **M3:** drift fitness curriculum, multi-track training, track library + test tracks
 5. **M4:** live multi-car viewer, replays, human review grid, network view, metrics dashboard, aesthetic polish
