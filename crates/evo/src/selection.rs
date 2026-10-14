@@ -24,14 +24,21 @@ pub fn positions(order: &[usize]) -> Vec<usize> {
     position
 }
 
-fn dominates(a: &[f64; 2], b: &[f64; 2]) -> bool {
+/// What Pareto selection maximises for each genome: driving, drifting and
+/// the judged score (see `Stage::objectives`).
+pub type Objectives = [f64; OBJECTIVES];
+pub const OBJECTIVES: usize = 3;
+
+fn dominates(a: &Objectives, b: &Objectives) -> bool {
     a.iter().zip(b).all(|(x, y)| x >= y) && a.iter().zip(b).any(|(x, y)| x > y)
 }
 
-/// Pareto ranking, maximising both objectives: each genome's front (0 = not
-/// beaten on both objectives by anyone) and crowding distance within its
-/// front (bigger = more unusual, infinite at the front's ends).
-pub fn pareto(objectives: &[[f64; 2]]) -> Vec<(usize, f64)> {
+/// Pareto ranking, maximising every objective: each genome's front (0 = not
+/// beaten on every objective by anyone) and crowding distance within its
+/// front (bigger = more unusual, infinite at the front's ends). An objective
+/// that's the same for everyone (e.g. the judged score before it's weighted)
+/// adds nothing to the crowding.
+pub fn pareto(objectives: &[Objectives]) -> Vec<(usize, f64)> {
     let n = objectives.len();
     let mut front = vec![usize::MAX; n];
     let mut remaining: Vec<usize> = (0..n).collect();
@@ -52,13 +59,14 @@ pub fn pareto(objectives: &[[f64; 2]]) -> Vec<(usize, f64)> {
     let mut crowding = vec![0.0; n];
     for r in 0..rank {
         let members: Vec<usize> = (0..n).filter(|&i| front[i] == r).collect();
-        for k in [0, 1] {
+        #[allow(clippy::needless_range_loop)] // k picks an objective inside each genome's array
+        for k in 0..OBJECTIVES {
             let mut sorted = members.clone();
             sorted.sort_by(|&a, &b| objectives[a][k].total_cmp(&objectives[b][k]).then(a.cmp(&b)));
             let (lo, hi) = (objectives[sorted[0]][k], objectives[sorted[sorted.len() - 1]][k]);
-            crowding[sorted[0]] = f64::INFINITY;
-            crowding[sorted[sorted.len() - 1]] = f64::INFINITY;
             if hi > lo {
+                crowding[sorted[0]] = f64::INFINITY;
+                crowding[sorted[sorted.len() - 1]] = f64::INFINITY;
                 for w in sorted.windows(3) {
                     crowding[w[1]] += (objectives[w[2]][k] - objectives[w[0]][k]) / (hi - lo);
                 }
@@ -69,7 +77,7 @@ pub fn pareto(objectives: &[[f64; 2]]) -> Vec<(usize, f64)> {
 }
 
 /// Best first by Pareto front, then by crowding (most unusual first).
-pub fn pareto_order(objectives: &[[f64; 2]]) -> Vec<usize> {
+pub fn pareto_order(objectives: &[Objectives]) -> Vec<usize> {
     let ranks = pareto(objectives);
     let mut order: Vec<usize> = (0..objectives.len()).collect();
     order.sort_by(|&a, &b| ranks[a].0.cmp(&ranks[b].0).then(ranks[b].1.total_cmp(&ranks[a].1)).then(a.cmp(&b)));
@@ -109,7 +117,8 @@ mod tests {
     fn pareto_fronts_and_crowding() {
         // 0: fast grip driver, 1: slow drifter, 2: both middling, 3: worse
         // than 2 at everything, 4: a copy of 2's neighbour space.
-        let points = [[10.0, 0.0], [2.0, 0.8], [6.0, 0.4], [5.0, 0.3], [7.0, 0.35]];
+        // The judged score is 0 for all (a stage that doesn't weight it).
+        let points = [[10.0, 0.0, 0.0], [2.0, 0.8, 0.0], [6.0, 0.4, 0.0], [5.0, 0.3, 0.0], [7.0, 0.35, 0.0]];
         let ranks = pareto(&points);
         assert_eq!(ranks[0].0, 0);
         assert_eq!(ranks[1].0, 0, "the slow drifter survives on the drift axis");
@@ -117,7 +126,17 @@ mod tests {
         assert_eq!(ranks[4].0, 0);
         assert_eq!(ranks[3].0, 1, "beaten on both by genome 2");
         assert!(ranks[0].1.is_infinite() && ranks[1].1.is_infinite());
+        assert!(ranks[2].1.is_finite() && ranks[4].1.is_finite(), "a constant objective gives no one an end of the front");
         let order = pareto_order(&points);
         assert_eq!(order[order.len() - 1], 3);
+    }
+
+    #[test]
+    fn the_judged_score_keeps_its_own_specialist() {
+        // 2 is beaten on driving and drifting by 0, but judges best.
+        let points = [[10.0, 0.8, 100.0], [5.0, 0.5, 50.0], [8.0, 0.6, 300.0]];
+        let ranks = pareto(&points);
+        assert_eq!((ranks[0].0, ranks[2].0), (0, 0));
+        assert_eq!(ranks[1].0, 1);
     }
 }

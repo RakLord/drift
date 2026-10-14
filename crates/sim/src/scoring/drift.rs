@@ -118,7 +118,8 @@ mod tests {
     #[test]
     fn held_side_then_quick_switch_is_a_transition() {
         let mut d = DriftDetector::default();
-        run(&mut d, 30.0, 1.0);
+        let hold = ScoringParams::default().drift.transition_min_hold_secs;
+        run(&mut d, 30.0, hold + 0.25);
         assert_eq!(run(&mut d, 2.0, 0.1), vec![]);
         assert_eq!(run(&mut d, -30.0, 0.5), vec![DriftEvent::Transition]);
     }
@@ -126,9 +127,10 @@ mod tests {
     #[test]
     fn short_side_then_switch_is_a_flick() {
         let mut d = DriftDetector::default();
+        let hold = ScoringParams::default().drift.transition_min_hold_secs;
         run(&mut d, 30.0, 0.3);
         assert_eq!(run(&mut d, -30.0, 0.3), vec![DriftEvent::Flick]);
-        assert_eq!(run(&mut d, 30.0, 1.0), vec![DriftEvent::Flick], "0.3 s on the left side is still a flick");
+        assert_eq!(run(&mut d, 30.0, hold + 0.25), vec![DriftEvent::Flick], "0.3 s on the left side is still a flick");
         assert_eq!(run(&mut d, -30.0, 0.3), vec![DriftEvent::Transition]);
     }
 

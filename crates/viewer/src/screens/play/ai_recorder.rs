@@ -62,6 +62,7 @@ impl AiRecorder {
             progress: world.progress,
             track_length: world.track.length,
             time: recording.ticks as f64 * TICK,
+            max_secs: 0.0,
             end,
             stats: EpisodeStats::default(),
         };

@@ -31,6 +31,10 @@ pub struct DriftParams {
     /// held this long; quicker is a flick (0 in older files: every switch).
     #[serde(default)]
     pub transition_min_hold_secs: f64,
+    /// A drift (start to end, transitions included) shorter than this banks
+    /// no points, only its penalties (0 in older files: every drift banks).
+    #[serde(default)]
+    pub min_bank_secs: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -40,6 +44,10 @@ pub struct AngleParams {
     pub full_from_deg: f64,
     pub full_to_deg: f64,
     pub zero_at_deg: f64,
+    /// Angle (and flow) credit starts here, or at the drift start angle if
+    /// that's higher (0 in older files: from the drift start).
+    #[serde(default)]
+    pub credit_from_deg: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -68,6 +76,11 @@ pub struct LineParams {
 #[serde(deny_unknown_fields)]
 pub struct StyleParams {
     pub transition_points: f64,
+    /// Scale transition points by the angle points' shape averaged over the
+    /// side just left, so a big held side pays more than a scrappy one
+    /// (false in older files: flat points).
+    #[serde(default)]
+    pub transition_scaled: bool,
     pub wall_tap_points: f64,
     pub wall_tap_min_speed: f64,
     pub wall_tap_max_speed: f64,
@@ -129,13 +142,14 @@ impl Default for ScoringParams {
 
 impl AngleParams {
     /// 0..1 share of angle points at a drift angle of `deg` (absolute):
-    /// ramps up from the drift start angle, full in the sweet spot, tapers
-    /// towards a spin.
+    /// ramps up from the drift start angle (or `credit_from_deg` if higher),
+    /// full in the sweet spot, tapers towards a spin.
     pub fn factor(&self, deg: f64, start_deg: f64) -> f64 {
-        if deg < start_deg {
+        let from = start_deg.max(self.credit_from_deg);
+        if deg < from {
             0.0
         } else if deg < self.full_from_deg {
-            common::math::smoothstep(start_deg, self.full_from_deg, deg)
+            common::math::smoothstep(from, self.full_from_deg, deg)
         } else if deg <= self.full_to_deg {
             1.0
         } else {
@@ -172,10 +186,22 @@ mod tests {
         let start = p.drift.start_angle_deg;
         let f = |deg| p.angle.factor(deg, start);
         assert_eq!(f(5.0), 0.0);
-        assert!(f(20.0) > 0.0 && f(20.0) < 1.0);
+        assert!(f(30.0) > 0.0 && f(30.0) < 1.0);
         assert_eq!(f(50.0), 1.0);
         assert!(f(85.0) < 1.0);
         assert_eq!(f(p.angle.zero_at_deg), 0.0);
+    }
+
+    #[test]
+    fn credit_floor_above_the_drift_start() {
+        let mut p = ScoringParams::default().angle;
+        p.credit_from_deg = 20.0;
+        assert_eq!(p.factor(15.0, 12.0), 0.0, "a drift, but below the credit floor");
+        assert!(p.factor(25.0, 12.0) > 0.0);
+        assert_eq!(p.factor(50.0, 12.0), 1.0);
+        assert_eq!(p.factor(8.0, 5.0), 0.0, "the floor holds with a lower drift start");
+        p.credit_from_deg = 0.0;
+        assert!(p.factor(8.0, 5.0) > 0.0, "no floor: credit from the drift start");
     }
 
     #[test]
@@ -193,8 +219,14 @@ mod tests {
         let mut old: toml::Table = toml::from_str(DEFAULT_SCORING_TOML).unwrap();
         old.remove("flow");
         old["drift"].as_table_mut().unwrap().remove("transition_min_hold_secs");
+        old["drift"].as_table_mut().unwrap().remove("min_bank_secs");
+        old["angle"].as_table_mut().unwrap().remove("credit_from_deg");
+        old["style"].as_table_mut().unwrap().remove("transition_scaled");
         let p: ScoringParams = toml::from_str(&toml::to_string(&old).unwrap()).unwrap();
         assert_eq!(p.drift.transition_min_hold_secs, 0.0, "every switch is a transition, as before");
+        assert_eq!(p.drift.min_bank_secs, 0.0, "every drift banks, as before");
+        assert_eq!(p.angle.credit_from_deg, 0.0, "credit from the drift start, as before");
+        assert!(!p.style.transition_scaled, "flat transition points, as before");
         assert_eq!(p.flow.ramp_secs, ScoringParams::default().flow.ramp_secs);
     }
 

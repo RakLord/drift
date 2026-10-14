@@ -11,6 +11,7 @@ pub mod frame;
 pub mod recording;
 pub mod scoring;
 pub mod sensors;
+pub mod smoothness;
 pub mod track;
 pub mod world;
 

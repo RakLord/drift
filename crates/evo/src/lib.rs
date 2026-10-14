@@ -19,3 +19,4 @@ pub use config::{GaConfig, Selection};
 pub use fitness::{Curriculum, Polish, Stage};
 pub use genome::Genome;
 pub use island::{Ids, Island, migrate};
+pub use selection::{OBJECTIVES, Objectives};

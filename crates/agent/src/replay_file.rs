@@ -411,6 +411,7 @@ mod tests {
             max_hard_hits: 3,
             end_on_spin: false,
             clutch_grace_secs: 0.4,
+            smoothness: Default::default(),
         };
         let (car, scoring) = (CarParams::default(), ScoringParams::default());
         let episode = Episode::new(track, car.clone(), scoring.clone(), config, 11);

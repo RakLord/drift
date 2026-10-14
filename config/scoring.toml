@@ -7,13 +7,15 @@ min_speed_kmh = 25.0          # ...at or above this speed, moving forwards
 end_angle_deg = 8.0           # drift ends after holding below this angle...
 end_hold_secs = 0.3           # ...for this long (a transition passes through quickly)
 spin_angle_deg = 100.0
-transition_min_hold_secs = 0.75  # a side held shorter than this then switched is a flick, not a transition
+transition_min_hold_secs = 1.5   # a side held shorter than this then switched is a flick, not a transition
+min_bank_secs = 1.0           # a drift shorter than this banks no points (penalties still count)
 
 [angle]
 points_per_sec = 100.0
 full_from_deg = 40.0          # full angle points between these angles
 full_to_deg = 65.0
 zero_at_deg = 100.0           # tapers to nothing at spin angle
+credit_from_deg = 20.0        # angle (and flow) credit starts here; smaller slides earn nothing
 
 [flow]
 # Training's drift quality: angle points' shape x hold credit, per second.
@@ -43,6 +45,7 @@ outer_zero_beyond = 4.0
 
 [style]
 transition_points = 300.0
+transition_scaled = true      # x the angle points' shape averaged over the side just left
 wall_tap_points = 400.0
 wall_tap_min_speed = 0.3      # m/s into the wall, rear bumper, while drifting
 wall_tap_max_speed = 3.0

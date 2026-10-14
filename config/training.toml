@@ -54,11 +54,15 @@ max_backwards = 20.0
 max_hard_hits = 3
 end_on_spin = true
 clutch_grace_secs = 0.4   # a clutch press shorter than this is a kick; longer is holding it
+# Sawing: a control changing direction by `reversal` or more within
+# `window_secs` of its last change of direction. Single swings (a lift, a
+# counter-steer catch, a transition) don't count. Charged by `smoothness`.
+smoothness = { throttle = { reversal = 0.2, window_secs = 0.3 }, steer = { reversal = 0.3, window_secs = 0.3 } }
 
 [tracks]
 per_generation = 3        # fresh generated tracks every generation (config/generator.toml)
 fixed = []              # saved tracks driven every generation too, e.g. ["tracks/generated_1.toml"]; left out of the test set
-pool = ["tracks/skidpad.toml", "tracks/generated_9.toml", "tracks/generated_11.toml", "tracks/generated_1.toml"]                 # saved tracks to draw from, e.g. ["tracks/generated_9.toml", ...]; left out of the test set
+pool = ["tracks/skidpad.toml", "tracks/generated_9.toml", "tracks/generated_11.toml", "tracks/driftland.toml", "tracks/ebisu_kita.toml", "tracks/ebisu_minami.toml", "tracks/generated_1.toml", "tracks/meihan.toml", "tracks/nikko.toml"]                 # saved tracks to draw from, e.g. ["tracks/generated_9.toml", ...]; left out of the test set
 pool_per_generation = 1   # pool tracks drawn each generation (also feeds the [best] check tracks)
 test_every = 10           # best genome vs the library tracks (tracks/*.toml) every N gens; 0 = never
 
@@ -93,6 +97,7 @@ drifters = 10
 #           + pedal_bonus * seconds on handbrake/clutch
 #           + line/angle/style * judged points
 #   fitness = reward * (1 - clutch.strength * clutch cost) - penalty * penalty points
+#   (the drift_quality and judged parts are also x the smoothness factor)
 # drift_quality is flow (config/scoring.toml [flow]): per second drifting, the
 # angle points' shape (full at 40-65 degrees) x a hold credit that builds up
 # the longer one side is held (0 -> 1 over ramp_secs, up to 1 + bonus). Linked
@@ -101,8 +106,16 @@ drifters = 10
 # or not combos get banked.
 # clutch cost = share of the run holding the clutch past a kick
 # ([episode] clutch_grace_secs), each second weighted from calm_weight at no
-# angle up to 1 at 45 degrees or more. Never below 0; it also cuts both pareto
+# angle up to 1 at 45 degrees or more. Never below 0; it also cuts the pareto
 # objectives, so selection feels it. Leave `clutch` out for no penalty.
+# smoothness factor = 1 - throttle * throttle saws/s - steer * steer saws/s,
+# per second drifting ([episode] smoothness), never below 0. Cuts the drift and
+# judged objectives, not driving. Steering is cheap on purpose: the car has no
+# self-steer, so catching a slide takes real steering. For scale, run7's best
+# at gen 3290 sawed ~0.8-2.5 throttle and ~7-16 steer times a second.
+# Leave `smoothness` out for no penalty.
+# Pareto selection ranks on three objectives: driving, drift_quality and the
+# judged score (line/angle/style weighted, less penalty).
 # `shaping` softens the rules while learning: drift counts from a few degrees,
 # flat speed multiplier, spins don't end the run, no bobble penalty. The final
 # stage has no shaping, so it's judged on the real config/scoring.toml.
@@ -138,6 +151,7 @@ angle = 0.0
 style = 0.0
 penalty = 0.0
 clutch = { strength = 2.0, calm_weight = 0.25 }
+smoothness = { throttle = 0.08, steer = 0.01 }  # half the judged weights: fresh networks saw a lot
 shaping = { drift_start_angle_deg = 5.0, speed_multiplier = 1.0, end_on_spin = false, bobble_penalty = 0.0 }
 advance = { metric = "drift_quality", at_least = 0.35, generations = 10 }  # flow
 
@@ -152,3 +166,4 @@ angle = 1.0
 style = 1.0
 penalty = 0.5
 clutch = { strength = 2.0, calm_weight = 0.25 }
+smoothness = { throttle = 0.15, steer = 0.02 }  # run7's gen-3290 best would keep ~0.3-0.6

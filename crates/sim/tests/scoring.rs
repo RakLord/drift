@@ -23,8 +23,12 @@ struct Rig {
 
 impl Rig {
     fn new(zones: Vec<ZoneDef>) -> Self {
+        Self::with(ScoringParams::default(), zones)
+    }
+
+    fn with(params: ScoringParams, zones: Vec<ZoneDef>) -> Self {
         let track = oval(EdgeKind::Hard, EdgeKind::Hard, zones);
-        let scorer = Scorer::new(ScoringParams::default(), &track);
+        let scorer = Scorer::new(params, &track);
         let world = World::new(track, CarParams::default());
         Self { world, scorer, x: 10.0, events: vec![] }
     }
@@ -169,4 +173,40 @@ fn four_wheels_on_the_verge_pauses_scoring() {
 
     assert_eq!(rig.scorer.combo.pending.angle, pending, "no points with all four wheels on the verge");
     assert!(rig.scorer.combo.active, "the combo is kept");
+}
+
+#[test]
+fn a_drift_too_short_to_judge_banks_only_penalties() {
+    let mut p = ScoringParams::default();
+    p.drift.min_bank_secs = 1.0;
+    let mut rig = Rig::with(p.clone(), vec![]);
+    rig.slide(0.0, 45.0, 0.5);
+    rig.slide(0.0, 0.0, 1.0);
+    assert_eq!(rig.count(|e| *e == ScoreEventKind::Banked), 1);
+    assert_eq!(rig.scorer.total.total(), 0.0, "a 0.5 s drift banks nothing");
+
+    let mut rig = Rig::with(p, vec![]);
+    rig.slide(0.0, 45.0, 1.5);
+    rig.slide(0.0, 0.0, 1.0);
+    assert!(rig.scorer.total.angle > 0.0, "a 1.5 s drift banks");
+}
+
+#[test]
+fn scaled_transitions_pay_for_the_angle_held() {
+    let mut p = ScoringParams::default();
+    p.drift.transition_min_hold_secs = 0.75;
+    p.angle.credit_from_deg = 20.0;
+    p.style.transition_scaled = true;
+    let transition = |deg: f64| {
+        let mut rig = Rig::with(p.clone(), vec![]);
+        rig.slide(0.0, deg, 1.0);
+        rig.slide(0.0, -deg, 0.5);
+        (rig.count(|e| *e == ScoreEventKind::Transition), rig.scorer.combo.pending.style)
+    };
+    let (big_count, big) = transition(50.0);
+    let (small_count, small) = transition(30.0);
+    let (tiny_count, tiny) = transition(16.0);
+    assert_eq!((big_count, small_count), (1, 1));
+    assert!(big > 1.5 * small && small > 0.0, "big {big} vs small {small}");
+    assert_eq!((tiny_count, tiny), (0, 0.0), "a side under the credit floor isn't judged");
 }

@@ -40,6 +40,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - Done: track screen (`O` / `--tracks`, see *Tracks › Track manager*): map cards, stats, fixed/pool/off roles for the defaults or a run, launcher "Pick in the viewer".
 - Done: `runs/<run>/tracks.csv` and the "this generation" strip on the track screen.
 - Done: Results tab (`Tab` on the track screen, with a run picked): per-track results over the last N generations, worst first, and the worst generated tracks to keep.
+- Done: run8 prep (after run7): three Pareto objectives (driving, flow, judged score), a smoothness penalty on sawing the throttle and steering, and stricter judging against jiggles (angle credit from 20°, drifts under 1 s bank nothing, transitions need 1.5 s sides and pay by the angle held). See *Training* and *Scoring*.
 - Next: Generate tab (see *Tracks › Track manager*).
 - Then: M3's features are in; what's left is user-led training to get cars drifting through drive -> slide -> judged (and, once judged works, polishing).
 
@@ -200,15 +201,15 @@ All numbers live in `config/scoring.toml` (hot-reloaded).
   - **Outer zone** (outside edge): scored on the **rear bumper**'s proximity to the edge, per second, while drifting through it.
 - **Drifting:** angle ≥ 12°, speed ≥ 25 km/h, moving forwards along the track. The drift ends after 0.3 s below 8° (a clean exit). Over 100° is a spin.
 - **Points per second while drifting**, × a speed multiplier (0.5× at 30 km/h → 1.5× at 100 km/h):
-  - **Angle:** ramps up from 12°, full at 40–65°, tapers off towards a spin.
+  - **Angle:** ramps up from 20° (`credit_from_deg`; drifts still start at 12°), full at 40–65°, tapers off towards a spin.
   - **Line:** clips + outer zones.
   - **Style:**
-    - transitions (linking direction changes) are a bonus, but only if the side before was held ≥ 0.75 s; a quicker switch is a flick and earns nothing
+    - transitions (linking direction changes) are a bonus, but only if the side before was held ≥ 1.5 s; a quicker switch is a flick and earns nothing. The bonus is × the angle points' shape averaged over the side just left (`transition_scaled`), so a side held under 20° isn't a transition at all
     - wall taps are a bonus: rear bumper into a hard wall at 0.3–3 m/s; at most one per 2 s and 2 per combo, so they can't be farmed
     - bobbles (angle dips sharply then recovers) are a penalty
 - **Combo:** points pile up × a multiplier.
   - The multiplier gets +0.1× per zone, transition or tap, capped at 3×.
-  - It's banked on a clean exit.
+  - It's banked on a clean exit, unless the drift lasted under 1 s (`min_bank_secs`): then only its penalties count.
   - A spin or a hard wall hit (≥ 3.5 m/s) loses it and adds a penalty.
   - All four wheels on the verge pauses scoring (no points, combo kept).
 - The **Line/Angle/Style breakdown** is kept separately for metrics and fitness.
@@ -267,9 +268,10 @@ Outputs are produced once per decision and held until the next one.
 - **Crossover:** neuron-level (a child takes each hidden neuron's whole incoming weight set from one parent).
 - **Mutation:** Gaussian noise on a random subset of weights, plus a rare large reset. σ shrinks over time or self-adapts per genome.
 - **Fitness (shaped from gen 0):** driving reward (progress, capped after stage 1, plus time alive) multiplied by (1 + drift_bonus × drift quality), where drift quality is *flow*. Banked judged score (Line/Angle/Style) counts in the final stage. Stages: drive → slide → judged. Shaping stages soften the scoring (drift from 5°, flat speed multiplier, spins don't end the run, no bobble penalty).
-- **Flow (drift quality, `[flow]` in scoring.toml):** came in after the slide stage learned to wiggle (quick left/right flicks paid the same raw angle-time as long arcs, and were safer). Each second drifting earns the angle points' shape (full at 40–65°, tapering towards a spin) × a hold credit: 0 → 1 over the first 1 s on one side, then up to 1.5 by 3 s. A linked transition carries 75% of the ramp into the next side; a flick, an end or a spin starts it again. Quality = flow-seconds ÷ run time (1.0 = a full-angle drift, each side held past the ramp, the whole run). Rewards long sweeping drifts without penalising anything. Quality numbers from before the switch aren't comparable. Metrics: `drift_hold` / `top_hold` (seconds per side), and the console's `side` column; the viewer HUD shows the live `flow x` credit.
+- **Flow (drift quality, `[flow]` in scoring.toml):** came in after the slide stage learned to wiggle (quick left/right flicks paid the same raw angle-time as long arcs, and were safer). Each second drifting earns the angle points' shape (full at 40–65°, tapering towards a spin) × a hold credit: 0 → 1 over the first 1 s on one side, then up to 1.5 by 3 s. A linked transition carries 75% of the ramp into the next side; a flick, an end or a spin starts it again. Quality = flow-seconds ÷ the run's time limit (`max_secs`; 1.0 = a full-angle drift, each side held past the ramp, the whole run). Until run8 it was ÷ the time the run lasted, so a car that spun out at 10 s kept a high quality; now a spin on the last corner costs ~8% and one at 10 s ~83%. Older files without the limit fall back to the time lasted. Rewards long sweeping drifts without penalising anything. Quality numbers from before the switch aren't comparable. Metrics: `drift_hold` / `top_hold` (seconds per side), and the console's `side` column; the viewer HUD shows the live `flow x` credit.
 - **Clutch penalty (`clutch` per stage):** a press shorter than 0.4 s is a kick and is free. Holding the clutch any longer counts, each second weighted by drift angle (0.25 with no angle, rising to 1 at 45°). The run's reward and both Pareto objectives are scaled by 1 − strength × (weighted hold time ÷ run time), never below 0. Strength 2 in every stage. Logged as `clutch_hold` / `clutch_hold_angle`.
-- **Selection:** Pareto ranking over (driving, drift quality) inside each island, so slidey crashers survive alongside grip drivers.
+- **Smoothness penalty (`smoothness` per stage):** sawing a control while drifting (changing direction by ≥ 0.2 throttle / 0.3 steer within 0.3 s of its last change of direction; `[episode] smoothness`, `sim/src/smoothness.rs`) scales the drift and judged objectives (and their part of fitness) by 1 − throttle × throttle saws/s − steer × steer saws/s, never below 0. Single swings (a lift, a counter-steer catch, a transition) are free. Steering is cheap on purpose: the car has no self-steer, so catching a slide takes real steering. Came in after run7: its gen-3290 best sawed the throttle ~0.8–2.5 and the steering ~7–16 times a second drifting. Weights: slide 0.08 / 0.01, judged 0.15 / 0.02. Logged as `best_/mean_throttle_saws`, `best_/mean_steer_saws` and the console's `saws/s` columns.
+- **Selection:** Pareto ranking over (driving, drift quality, judged score) inside each island, so slidey crashers survive alongside grip drivers. The judged score (line/angle/style weighted, less penalty) only became an objective after run7: until then the judged stage's weights only fed `fitness` (saved best, logs), so judged points never chose who bred. Logged as `best_judged`.
 - **Stage change:** σ resets and 30% of each island is reseeded with heavily mutated copies of its best.
 - **Starting priors:** calm start (straight, some throttle, brake off, handbrake/clutch light).
 - **Early termination:** a crash, spin, or no progress for a few seconds ends the episode.

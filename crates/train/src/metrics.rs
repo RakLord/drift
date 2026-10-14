@@ -6,7 +6,7 @@ use std::path::Path;
 
 use evo::Island;
 use evo::diversity::{behaviour, behaviour_diversity, diversity};
-use evo::fitness::drift_quality;
+use evo::fitness::{SmoothnessPenalty, drift_quality};
 use sim::episode::{EndReason, EpisodeResult};
 use sim::scoring::Breakdown;
 
@@ -93,6 +93,14 @@ pub struct Report {
     pub sigma: f64,
     pub seconds: f64,
     pub steps_per_sec: f64,
+    /// Saws per second of drifting (throttle, steer; see
+    /// `evo::fitness::SmoothnessPenalty`): the saved driver's, and the
+    /// population's.
+    pub best_saws: (f64, f64),
+    pub mean_saws: (f64, f64),
+    /// The saved driver's judged objective (weighted judged score less
+    /// penalties, after the pedal penalties) on its training runs.
+    pub best_judged: f64,
     /// Best genome on the library tracks, when tested this generation.
     pub test_fitness: Option<f64>,
     pub test_laps: Option<f64>,
@@ -148,6 +156,11 @@ impl Report {
             let sides: u32 = runs.iter().map(|r| r.stats.drift_sides).sum();
             if sides > 0 { time / f64::from(sides) } else { 0.0 }
         };
+        let saws = |runs: &[&EpisodeResult]| {
+            let rates: Vec<(f64, f64)> = runs.iter().map(|r| SmoothnessPenalty::rates(r)).collect();
+            (mean(rates.iter().map(|r| r.0)), mean(rates.iter().map(|r| r.1)))
+        };
+        let drifting_runs: Vec<&EpisodeResult> = drifting.iter().map(|r| **r).collect();
         let mut ends = [0.0; 6];
         for r in &all {
             let k = EndReason::ALL.iter().position(|&e| e == r.end).unwrap_or(0);
@@ -197,6 +210,9 @@ impl Report {
             sigma: mean(islands.iter().flat_map(|i| i.genomes.iter().map(|g| g.sigma))),
             seconds,
             steps_per_sec: ticks as f64 / seconds.max(1e-9),
+            best_saws: saws(&best_runs),
+            mean_saws: saws(&drifting_runs),
+            best_judged: islands.get(saved.island).and_then(|i| i.objectives.get(saved.genome)).map_or(0.0, |o| o[2]),
             test_fitness: None,
             test_laps: None,
         }
@@ -206,14 +222,15 @@ impl Report {
     pub fn legend() -> &'static str {
         "drift q = flow (1.0 = a full-angle drift, each side held 1 s+, the whole run; flicks earn little). side = seconds per drift side. top = the most drift-y genome, \
          saved = the driver written to best.genome (fitness over all its runs; # = its fitness rank this generation). score = banked judged points. angle = typical biggest angle per run. \
+         saws = the saved driver's quick throttle / steer back-and-forths per second drifting. \
          ends: T time up, NP no progress, CR crashed, ST stalled, SP spun, BK backwards"
     }
 
     /// Column headings; printed at the start and every so often.
     pub fn header() -> String {
         [
-            "  gen stage │ ── top drifter ────────────────── │ ── saved best ──────────── │ ── population ────────────────── │ ends %            │ pedals %             │",
-            "            │ drift q  angle  side  score  laps │ fitness drift q  laps    # │ drift q  >20°  angle spins  bdiv │  T NP CR ST SP BK │  hb clutch slip hold │ secs",
+            "  gen stage │ ── top drifter ────────────────── │ ── saved best ──────────── │ ── population ────────────────── │ ends %            │ pedals %             │ saws/s    │",
+            "            │ drift q  angle  side  score  laps │ fitness drift q  laps    # │ drift q  >20°  angle spins  bdiv │  T NP CR ST SP BK │  hb clutch slip hold │ thr steer │ secs",
         ]
         .join("\n")
     }
@@ -231,7 +248,7 @@ impl Report {
             test += &format!("  [{} replays]", self.replays);
         }
         format!(
-            "{:>5} {:<6}│   {:>5.2} {:>5.0}° {:>4.1}s {:>6.0} {:>5.2} │ {:>7.0}   {:>5.2} {:>5.2} {:>4} │   {:>5.2} {:>4.0}% {:>5.0}° {:>5.1} {:>5.3} │ {} {} {} {} {} {} │ {:>3.0} {:>6.0} {:>4.0} {:>4.0} │ {:>4.1}{test}",
+            "{:>5} {:<6}│   {:>5.2} {:>5.0}° {:>4.1}s {:>6.0} {:>5.2} │ {:>7.0}   {:>5.2} {:>5.2} {:>4} │   {:>5.2} {:>4.0}% {:>5.0}° {:>5.1} {:>5.3} │ {} {} {} {} {} {} │ {:>3.0} {:>6.0} {:>4.0} {:>4.0} │ {:>3.1} {:>5.1} │ {:>4.1}{test}",
             self.generation,
             self.stage,
             self.top_quality,
@@ -258,6 +275,8 @@ impl Report {
             self.clutch_share * 100.0,
             self.clutch_slip * 100.0,
             self.clutch_hold * 100.0,
+            self.best_saws.0,
+            self.best_saws.1,
             self.seconds,
         )
     }
@@ -356,6 +375,11 @@ impl Report {
             ("sigma", self.sigma),
             ("seconds", self.seconds),
             ("steps_per_sec", self.steps_per_sec),
+            ("best_throttle_saws", self.best_saws.0),
+            ("best_steer_saws", self.best_saws.1),
+            ("mean_throttle_saws", self.mean_saws.0),
+            ("mean_steer_saws", self.mean_saws.1),
+            ("best_judged", self.best_judged),
         ] {
             num(name, v);
         }

@@ -6,7 +6,8 @@
 //! that grips: `fitness = (progress + time alive) x (1 + drift_bonus x
 //! drift_quality) + judged score terms`.
 //! Holding the clutch (rather than kicking it) scales a run's reward down,
-//! harder the more sideways the car is.
+//! harder the more sideways the car is; so does sawing the throttle or the
+//! steering while drifting.
 //! Shaping stages also soften the scoring rules (drift counts from a few
 //! degrees, spins don't end the run); the final stage is judged for real.
 
@@ -14,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use sim::episode::{EpisodeConfig, EpisodeResult};
 use sim::scoring::ScoringParams;
 
-use crate::GaConfig;
+use crate::{GaConfig, Objectives};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -44,6 +45,9 @@ pub struct Stage {
     /// Cost of holding the clutch (none = free).
     #[serde(default)]
     pub clutch: Option<ClutchPenalty>,
+    /// Cost of sawing the throttle or steering while drifting (none = free).
+    #[serde(default)]
+    pub smoothness: Option<SmoothnessPenalty>,
     /// Softer rules while learning to drift (none = the real rules).
     #[serde(default)]
     pub shaping: Option<Shaping>,
@@ -96,6 +100,36 @@ impl ClutchPenalty {
     }
 }
 
+/// Sawing the throttle or the steering while drifting (quick back-and-forths,
+/// see `sim::smoothness`) scales the drifting rewards by `1 - throttle x
+/// throttle saws per second - steer x steer saws per second` (never below
+/// 0), per second spent drifting. Steering is cheaper: the car has no
+/// self-steer, so catching a slide takes real steering.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SmoothnessPenalty {
+    pub throttle: f64,
+    pub steer: f64,
+}
+
+/// Saw rates count from at least this much drifting, seconds, so a run
+/// that barely drifted isn't judged on a blip.
+const MIN_SAW_SECS: f64 = 1.0;
+
+impl SmoothnessPenalty {
+    /// Saws per second of drifting: (throttle, steer).
+    pub fn rates(r: &EpisodeResult) -> (f64, f64) {
+        let secs = r.stats.drift_time.max(MIN_SAW_SECS);
+        (f64::from(r.stats.throttle_saws) / secs, f64::from(r.stats.steer_saws) / secs)
+    }
+
+    /// Share of the run's drifting reward it keeps.
+    pub fn factor(&self, r: &EpisodeResult) -> f64 {
+        let (throttle, steer) = Self::rates(r);
+        (1.0 - self.throttle * throttle - self.steer * steer).max(0.0)
+    }
+}
+
 /// Scoring and episode rules for shaping stages.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,16 +151,21 @@ impl Shaping {
         scoring.speed.slow_multiplier = self.speed_multiplier;
         scoring.speed.fast_multiplier = self.speed_multiplier;
         scoring.style.bobble_penalty = self.bobble_penalty;
+        // Credit from the shaping start angle, under any judged floor.
+        scoring.angle.credit_from_deg = self.drift_start_angle_deg;
         episode.end_on_spin = self.end_on_spin;
     }
 }
 
 /// How much and how smoothly a run drifted, from flow (`sim::scoring::flow`):
 /// 1.0 = a full-angle drift, each side held past the hold ramp, for the
-/// whole run; up to 1 + the hold bonus for sides held longer still. Quick
-/// flicks earn little. Doesn't depend on banking combos.
+/// whole time limit; up to 1 + the hold bonus for sides held longer still.
+/// Quick flicks earn little. Doesn't depend on banking combos. A run that
+/// ends early (a spin, a crash) loses the share of the time limit it didn't
+/// drive, so spinning out late costs little and early costs a lot (runs
+/// without a known limit are judged on the time they lasted).
 pub fn drift_quality(r: &EpisodeResult) -> f64 {
-    r.stats.flow_seconds / r.time.max(1e-9)
+    r.stats.flow_seconds / r.time.max(r.max_secs).max(1e-9)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -183,12 +222,24 @@ impl Stage {
         self.clutch.as_ref().map_or(1.0, |c| c.factor(r))
     }
 
-    fn run_fitness(&self, r: &EpisodeResult) -> f64 {
+    /// Share of a run's drifting reward kept after the smoothness penalty
+    /// (1 = none).
+    pub fn smoothness_factor(&self, r: &EpisodeResult) -> f64 {
+        self.smoothness.as_ref().map_or(1.0, |s| s.factor(r))
+    }
+
+    /// The judged score's categories, weighted (before any pedal penalty).
+    fn judged_points(&self, r: &EpisodeResult) -> f64 {
         let s = &r.score;
-        let shaped = self.base(r) * (1.0 + self.drift_bonus * drift_quality(r));
+        self.line * s.line + self.angle * s.angle + self.style * s.style
+    }
+
+    fn run_fitness(&self, r: &EpisodeResult) -> f64 {
+        let base = self.base(r);
+        let shaped = base * (1.0 + self.drift_bonus * drift_quality(r) * self.smoothness_factor(r));
         let pedals = self.pedal_bonus * (r.stats.handbrake_time + r.stats.clutch_time);
-        let reward = shaped + pedals + self.line * s.line + self.angle * s.angle + self.style * s.style;
-        reward * self.clutch_factor(r) - self.penalty * s.penalty
+        let judged = self.judged_points(r) * self.smoothness_factor(r);
+        (shaped + pedals + judged) * self.clutch_factor(r) - self.penalty * r.score.penalty
     }
 
     /// A genome's fitness: the average over its runs (one per track).
@@ -196,11 +247,19 @@ impl Stage {
         mean(results, |r| self.run_fitness(r))
     }
 
-    /// The two things selection trades off: driving (progress / staying
-    /// alive) and drifting (drift quality), each averaged over the runs and
-    /// both cut by the clutch penalty.
-    pub fn objectives(&self, results: &[EpisodeResult]) -> [f64; 2] {
-        [mean(results, |r| self.base(r) * self.clutch_factor(r)), mean(results, |r| drift_quality(r) * self.clutch_factor(r))]
+    /// The three things selection trades off, each averaged over the runs:
+    /// driving (progress / staying alive), drifting (drift quality) and the
+    /// judged score (weighted categories less penalties; 0 while a stage
+    /// gives them no weight). All are cut by the clutch penalty; the last
+    /// two by the smoothness penalty too.
+    pub fn objectives(&self, results: &[EpisodeResult]) -> Objectives {
+        [
+            mean(results, |r| self.base(r) * self.clutch_factor(r)),
+            mean(results, |r| drift_quality(r) * self.clutch_factor(r) * self.smoothness_factor(r)),
+            mean(results, |r| {
+                self.judged_points(r) * self.clutch_factor(r) * self.smoothness_factor(r) - self.penalty * r.score.penalty
+            }),
+        ]
     }
 
     /// GA settings for this stage: the base ones, with any polish applied.
@@ -283,6 +342,7 @@ mod tests {
             progress,
             track_length: 1000.0,
             time: 30.0,
+            max_secs: 0.0,
             end: EndReason::TimeUp,
             stats: EpisodeStats::default(),
         }
@@ -301,6 +361,7 @@ mod tests {
             style: 0.0,
             penalty: 1.0,
             clutch: None,
+            smoothness: None,
             shaping: None,
             advance,
             polish: None,
@@ -342,6 +403,56 @@ mod tests {
     }
 
     #[test]
+    fn ending_early_costs_the_flow_it_did_not_drive() {
+        // Full flow credit every second until the run ends.
+        let ended_at = |secs: f64| {
+            let mut r = result(500.0, 0.0, 0.0);
+            (r.time, r.max_secs, r.stats.flow_seconds) = (secs, 60.0, secs);
+            drift_quality(&r)
+        };
+        assert!((ended_at(60.0) - 1.0).abs() < 1e-9);
+        assert!((ended_at(55.0) - 55.0 / 60.0).abs() < 1e-9, "a spin on the last corner costs ~8%");
+        assert!((ended_at(10.0) - 10.0 / 60.0).abs() < 1e-9, "a spin at 10 s costs ~83%");
+        // No known limit (older files): judged on the time it lasted.
+        let mut old = result(500.0, 0.0, 0.0);
+        old.stats.flow_seconds = 15.0;
+        assert!((drift_quality(&old) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sawing_cuts_the_drifting_rewards_not_the_driving() {
+        let smoothness = SmoothnessPenalty { throttle: 0.2, steer: 0.05 };
+        let s = Stage { drift_bonus: 1.0, penalty: 0.0, smoothness: Some(smoothness), ..stage(1.0, 1.0, None) };
+        let mut smooth = result(600.0, 400.0, 0.0);
+        smooth.stats.drift_time = 20.0;
+        smooth.stats.flow_seconds = 15.0;
+        // 2 throttle and 4 steer saws per second drifting: 1 - 0.4 - 0.2.
+        let mut sawing = smooth;
+        sawing.stats.throttle_saws = 40;
+        sawing.stats.steer_saws = 80;
+        assert!((s.smoothness_factor(&sawing) - 0.4).abs() < 1e-9);
+        assert_eq!(s.smoothness_factor(&smooth), 1.0);
+        let (a, b) = (s.objectives(&[smooth]), s.objectives(&[sawing]));
+        assert_eq!(a[0], b[0], "driving isn't judged on smoothness");
+        assert!((b[1] - 0.4 * a[1]).abs() < 1e-9 && (b[2] - 0.4 * a[2]).abs() < 1e-9);
+        assert!(s.fitness(&[sawing]) < s.fitness(&[smooth]));
+        // A blip of drifting isn't judged as a rate over a blip.
+        let mut blip = smooth;
+        blip.stats.drift_time = 0.1;
+        blip.stats.throttle_saws = 1;
+        assert!((s.smoothness_factor(&blip) - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn judged_objective_weighs_categories_and_penalties() {
+        let s = Stage { penalty: 0.5, ..stage(0.1, 1.0, None) };
+        let o = s.objectives(&[result(500.0, 300.0, 200.0)]);
+        assert_eq!(o[2], 300.0 - 0.5 * 200.0);
+        let no_weights = stage(1.0, 0.0, None);
+        assert_eq!(no_weights.objectives(&[result(500.0, 300.0, 0.0)])[2], 0.0, "no judged weights, nothing to rank on");
+    }
+
+    #[test]
     fn progress_cap_and_time_alive() {
         let s = Stage { progress_cap_laps: Some(1.0), time_alive: 5.0, penalty: 0.0, ..stage(1.0, 0.0, None) };
         // 1500 m on a 1000 m track in 30 s: credited 1000 m + 150 for time.
@@ -363,6 +474,7 @@ mod tests {
             max_hard_hits: 3,
             end_on_spin: true,
             clutch_grace_secs: 0.4,
+            smoothness: Default::default(),
         };
         let (scoring, episode) = s.rules(&real, &episode);
         assert_eq!(scoring.drift.start_angle_deg, 5.0);

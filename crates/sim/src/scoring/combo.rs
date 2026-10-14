@@ -47,11 +47,13 @@ pub struct Combo {
     pub multiplier: f64,
     /// Wall taps credited in this combo.
     pub taps: u32,
+    /// How long this combo has been running, seconds.
+    pub secs: f64,
 }
 
 impl Default for Combo {
     fn default() -> Self {
-        Self { active: false, pending: Breakdown::default(), multiplier: 1.0, taps: 0 }
+        Self { active: false, pending: Breakdown::default(), multiplier: 1.0, taps: 0, secs: 0.0 }
     }
 }
 

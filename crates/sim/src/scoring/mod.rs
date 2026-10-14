@@ -61,6 +61,20 @@ struct OuterState {
     entered: bool,
 }
 
+/// Angle credit over the side being drifted now, for scaling transitions.
+#[derive(Clone, Copy, Debug, Default)]
+struct Side {
+    factor_secs: f64,
+    secs: f64,
+}
+
+impl Side {
+    /// Mean angle points' shape over the side (0 if it hasn't started).
+    fn mean_factor(&self) -> f64 {
+        if self.secs > 0.0 { self.factor_secs / self.secs } else { 0.0 }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct Bobble {
     peak: f64,
@@ -82,6 +96,7 @@ pub struct Scorer {
     clips: Vec<ClipState>,
     outers: Vec<OuterState>,
     bobble: Bobble,
+    side: Side,
     time: f64,
     last_tap: f64,
 }
@@ -100,6 +115,7 @@ impl Scorer {
             clips: vec![ClipState::default(); zones],
             outers: vec![OuterState::default(); zones],
             bobble: Bobble::default(),
+            side: Side::default(),
             time: 0.0,
             last_tap: f64::NEG_INFINITY,
         }
@@ -122,22 +138,39 @@ impl Scorer {
         match event {
             DriftEvent::Started => {
                 self.combo.start();
+                self.side = Side::default();
                 self.bobble = Bobble { peak: angle.abs().to_degrees(), dip: None };
                 self.emit(ScoreEventKind::DriftStart, 0.0);
             }
             DriftEvent::Transition => {
-                let points = self.params.style.transition_points * speed_mult;
-                self.combo.pending.style += points;
-                self.combo.bump(&self.params.combo);
-                self.emit(ScoreEventKind::Transition, points);
+                let style = &self.params.style;
+                let scale = if style.transition_scaled { self.side.mean_factor() } else { 1.0 };
+                self.side = Side::default();
+                // A switch between sides that earned no angle credit isn't
+                // judged as a transition.
+                if scale > 0.0 {
+                    let points = style.transition_points * scale * speed_mult;
+                    self.combo.pending.style += points;
+                    self.combo.bump(&self.params.combo);
+                    self.emit(ScoreEventKind::Transition, points);
+                }
             }
+            DriftEvent::Flick => self.side = Side::default(),
             DriftEvent::Ended => self.bank(),
             DriftEvent::Spin => {
                 self.combo.lose();
                 self.total.penalty += self.params.combo.spin_penalty;
                 self.emit(ScoreEventKind::Spin, -self.params.combo.spin_penalty);
             }
-            DriftEvent::Flick | DriftEvent::None => {}
+            DriftEvent::None => {}
+        }
+        if self.drift.active {
+            let factor = self.params.angle.factor(angle.abs().to_degrees(), self.params.drift.start_angle_deg);
+            self.side.factor_secs += factor * dt;
+            self.side.secs += dt;
+        }
+        if self.combo.active {
+            self.combo.secs += dt;
         }
 
         let scoring = self.drift.active && self.combo.active && !on_verge;
@@ -171,7 +204,12 @@ impl Scorer {
         if !self.combo.active {
             return;
         }
-        let value = self.combo.bank();
+        let short = self.combo.secs < self.params.drift.min_bank_secs;
+        let mut value = self.combo.bank();
+        if short {
+            // Too brief to judge: only the penalties count.
+            value = Breakdown { penalty: value.penalty, ..Breakdown::default() };
+        }
         self.total += value;
         self.emit(ScoreEventKind::Banked, value.total());
     }

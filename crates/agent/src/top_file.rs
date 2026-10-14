@@ -170,6 +170,7 @@ mod tests {
             max_hard_hits: 3,
             end_on_spin: false,
             clutch_grace_secs: 0.4,
+            smoothness: Default::default(),
         };
         let header = TopHeader {
             run: "r".into(),

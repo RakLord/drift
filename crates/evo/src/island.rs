@@ -4,7 +4,7 @@ use nn::NetworkSpec;
 use crate::crossover::neuron_crossover;
 use crate::mutation::mutate;
 use crate::config::Selection;
-use crate::selection::{pareto_order, positions, ranked, tournament};
+use crate::selection::{Objectives, pareto_order, positions, ranked, tournament};
 use crate::{GaConfig, Genome};
 
 /// Hands out unique genome ids.
@@ -27,8 +27,8 @@ pub struct Island {
     /// Fitness of each genome after evaluation (same order as `genomes`).
     pub fitness: Vec<f64>,
     /// Pareto objectives of each genome after evaluation (driving, drift
-    /// quality); used when selection is Pareto.
-    pub objectives: Vec<[f64; 2]>,
+    /// quality, judged score); used when selection is Pareto.
+    pub objectives: Vec<Objectives>,
 }
 
 impl Island {
@@ -198,9 +198,9 @@ mod tests {
         // Genome 0 drives far, genome 1 drifts hard, the rest are mediocre.
         island.fitness = (0..20).map(|i| if i < 2 { 50.0 } else { 10.0 }).collect();
         island.objectives = (0..20).map(|i| match i {
-            0 => [100.0, 0.0],
-            1 => [5.0, 0.9],
-            _ => [10.0, 0.1],
+            0 => [100.0, 0.0, 0.0],
+            1 => [5.0, 0.9, 0.0],
+            _ => [10.0, 0.1, 0.0],
         }).collect();
         let (driver, drifter) = (island.genomes[0].clone(), island.genomes[1].clone());
         island.breed(&GaConfig { elite_fraction: 0.1, ..cfg() }, &mut rng, &mut ids, 1);

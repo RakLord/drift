@@ -12,6 +12,7 @@ use crate::controller::Controller;
 use crate::recording::{Recorder, Recording};
 use crate::scoring::{Breakdown, ScoreEvent, ScoreEventKind, Scorer, ScoringParams};
 use crate::sensors::observation::{Observation, Observer};
+use crate::smoothness::{SawDetector, SmoothnessConfig};
 use crate::track::Track;
 
 pub const TICK: f64 = 1.0 / 120.0;
@@ -44,6 +45,10 @@ pub struct EpisodeConfig {
     /// towards `EpisodeStats::clutch_hold_time`, seconds.
     #[serde(default = "default_clutch_grace_secs")]
     pub clutch_grace_secs: f64,
+    /// What counts as sawing the throttle or steering (see
+    /// `EpisodeStats::throttle_saws`).
+    #[serde(default)]
+    pub smoothness: SmoothnessConfig,
 }
 
 fn default_clutch_grace_secs() -> f64 {
@@ -116,6 +121,12 @@ pub struct EpisodeStats {
     /// Sides drifted: starts, transitions and flicks.
     #[serde(default)]
     pub drift_sides: u32,
+    /// Quick back-and-forths on the throttle and the steering while
+    /// drifting (see `smoothness`).
+    #[serde(default)]
+    pub throttle_saws: u32,
+    #[serde(default)]
+    pub steer_saws: u32,
 }
 
 impl EpisodeStats {
@@ -137,6 +148,9 @@ pub struct EpisodeResult {
     pub progress: f64,
     pub track_length: f64,
     pub time: f64,
+    /// The run's time limit, seconds (0 when unknown, e.g. older files).
+    #[serde(default)]
+    pub max_secs: f64,
     pub end: EndReason,
     pub stats: EpisodeStats,
 }
@@ -210,6 +224,8 @@ pub struct Episode {
     stats: EpisodeStats,
     /// How long the clutch has been held in this press, seconds.
     clutch_held: f64,
+    throttle_saw: SawDetector,
+    steer_saw: SawDetector,
     end: Option<EndReason>,
     /// Recording for a replay, if asked for. Never changes the run.
     recorder: Option<Recorder>,
@@ -234,6 +250,8 @@ impl Episode {
             termination: Termination::default(),
             stats: EpisodeStats::default(),
             clutch_held: 0.0,
+            throttle_saw: SawDetector::default(),
+            steer_saw: SawDetector::default(),
             end: None,
             recorder: None,
         }
@@ -324,14 +342,19 @@ impl Episode {
             }
         }
         stats.peak_clutch_temp = stats.peak_clutch_temp.max(self.world.car.state.drivetrain.clutch_temp);
+        let time = self.tick as f64 * TICK;
+        let smooth = &self.config.smoothness;
+        let throttle_saw = self.throttle_saw.update(&smooth.throttle, controls.throttle, time);
+        let steer_saw = self.steer_saw.update(&smooth.steer, controls.steer, time);
         if self.scorer.drift.active {
+            stats.throttle_saws += u32::from(throttle_saw);
+            stats.steer_saws += u32::from(steer_saw);
             stats.drift_time += TICK;
             stats.angle_seconds += self.world.car.state.body_slip_angle().abs().to_degrees() * TICK;
             stats.flow_seconds += self.scorer.flow.credit * TICK;
         }
         stats.drift_sides = self.scorer.flow.sides;
 
-        let time = self.tick as f64 * TICK;
         let running = self.world.car.state.engine_running();
         self.end = self.termination.update(&self.config, self.world.progress, running, events, time, TICK);
         if self.end == Some(EndReason::TimeUp) {
@@ -366,6 +389,7 @@ impl Episode {
             progress: self.termination.best_progress.max(self.world.progress),
             track_length: self.world.track.length,
             time: self.tick as f64 * TICK,
+            max_secs: self.config.max_secs,
             end: self.end.unwrap_or(EndReason::TimeUp),
             stats: self.stats,
         }
