@@ -1,6 +1,7 @@
 pub mod library;
 pub mod play;
 pub mod replay;
+pub mod review;
 pub mod tracks;
 pub mod watch;
 
@@ -12,6 +13,8 @@ pub enum Switch {
     Watch(String),
     /// The run's replays.
     Replays(String),
+    /// The review grid: pick the run's drivers to boost.
+    Review(String),
     /// The track screen, showing this run's training set (or the defaults).
     Tracks(Option<String>),
     /// Drive this library track (from the track screen).

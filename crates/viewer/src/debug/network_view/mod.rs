@@ -35,6 +35,8 @@ pub struct NetworkView {
     density: f32,
     collapsed: [bool; LAYOUT.len()],
     pinned: Option<Node>,
+    /// Nodes whose edges are left out (right-click toggles).
+    hidden: Vec<Node>,
     snapshot: Option<Snapshot>,
     health: Health,
     outputs: OutputHistory,
@@ -47,6 +49,7 @@ impl NetworkView {
             density: 0.05,
             collapsed: [false; LAYOUT.len()],
             pinned: None,
+            hidden: Vec::new(),
             snapshot: None,
             health: Health::default(),
             outputs: OutputHistory::default(),
@@ -65,6 +68,7 @@ impl NetworkView {
         if self.snapshot.as_ref().is_some_and(|s| s.spec != net.spec) {
             self.clear();
             self.pinned = None;
+            self.hidden.clear();
         }
         let activations = net.activations().to_vec();
         self.health.push(net, &activations);
@@ -105,6 +109,14 @@ impl NetworkView {
                     self.pinned = if hover == self.pinned { None } else { hover };
                 }
             }
+            if is_mouse_button_pressed(MouseButton::Right)
+                && let Some(node) = hover
+            {
+                match self.hidden.iter().position(|&h| h == node) {
+                    Some(i) => _ = self.hidden.swap_remove(i),
+                    None => self.hidden.push(node),
+                }
+            }
         }
         // Collapsing can leave a pin pointing at a node that's gone.
         let gone = match self.pinned {
@@ -120,10 +132,21 @@ impl NetworkView {
         for layer in 0..net.layer_count() {
             let source = if layer == 0 { &snapshot.input[..] } else { &snapshot.activations[layer - 1][..] };
             let edges = edges::layer_edges(net, layer, source, self.mode, &layout);
-            edges::draw(&edges, &layout, self.density, highlight);
+            edges::draw(&edges, &layout, self.density, highlight, &self.hidden);
         }
         self.draw_inputs(snapshot, &layout);
         self.draw_layers(net, snapshot, &layout, body);
+        for &node in &self.hidden {
+            let shown = match node {
+                Node::Group(g) => layout.groups[g].is_some(),
+                Node::Input(i) => layout.shows_input(i),
+                Node::Neuron { .. } => true,
+            };
+            if shown {
+                let at = layout.pos(node);
+                draw_circle_lines(at.x, at.y, 9.0, 1.5, theme::TEXT_DIM);
+            }
+        }
         if let Some(node) = self.pinned {
             let at = layout.pos(node);
             draw_circle_lines(at.x, at.y, 11.0, 2.0, WHITE);
@@ -165,7 +188,10 @@ impl NetworkView {
             self.collapsed = [!any_collapsed; LAYOUT.len()];
             self.pinned = self.pinned.filter(|p| matches!(p, Node::Neuron { .. }));
         }
-        let hint = format!("{}   hover: inspect  click: pin  wheel: density", net.spec.describe());
+        if !self.hidden.is_empty() && chip(&mut x, y, &format!("show all ({})", self.hidden.len()), false) {
+            self.hidden.clear();
+        }
+        let hint = format!("{}   hover: inspect  click: pin  right-click: hide  wheel: density", net.spec.describe());
         let w = measure_text(&hint, None, 14, 1.0).width;
         if x + 20.0 + w < rect.x + rect.w {
             text(&hint, rect.x + rect.w - w - 10.0, y + 16.0, 14.0, theme::TEXT_DIM);

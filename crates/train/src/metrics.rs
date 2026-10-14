@@ -106,7 +106,7 @@ pub struct Report {
     pub test_laps: Option<f64>,
 }
 
-fn mean_score(results: &[&EpisodeResult]) -> Breakdown {
+pub(crate) fn mean_score(results: &[&EpisodeResult]) -> Breakdown {
     let n = results.len().max(1) as f64;
     let sum = results.iter().fold(Breakdown::default(), |acc, r| acc + r.score);
     Breakdown { line: sum.line / n, angle: sum.angle / n, style: sum.style / n, penalty: sum.penalty / n }

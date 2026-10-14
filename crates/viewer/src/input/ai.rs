@@ -49,6 +49,7 @@ impl RunSettings {
                 end_on_spin: true,
                 clutch_grace_secs: 0.4,
                 smoothness: Default::default(),
+                steering: Default::default(),
             },
             |f| f.episode,
         );
@@ -119,7 +120,7 @@ impl AiDriver {
 
     fn install(&mut self, saved: SavedGenome) {
         let network = Network::new(saved.header.spec.clone(), saved.params);
-        self.current = Some((saved.header, NnDriver::new(network)));
+        self.current = Some((saved.header, NnDriver::new(network, &self.run.episode)));
     }
 
     /// Follow mode: check for a newer genome. Returns a message when one
@@ -164,6 +165,9 @@ impl AiDriver {
 
     /// Start a new run.
     pub fn reset(&mut self) {
+        if let Some((_, driver)) = &mut self.current {
+            driver.reset();
+        }
         self.tick = 0;
         self.held = Controls::default();
         self.termination = Termination::default();

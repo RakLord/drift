@@ -25,6 +25,7 @@ fn config() -> EpisodeConfig {
         end_on_spin: true,
         clutch_grace_secs: 0.4,
         smoothness: Default::default(),
+        steering: Default::default(),
     }
 }
 

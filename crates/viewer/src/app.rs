@@ -6,6 +6,7 @@ use macroquad::prelude::*;
 
 use crate::screens::play::PlayScreen;
 use crate::screens::replay::{self, ReplayScreen};
+use crate::screens::review::ReviewScreen;
 use crate::screens::Switch;
 use crate::screens::tracks::{self, TracksScreen};
 use crate::screens::watch::WatchScreen;
@@ -46,6 +47,8 @@ pub struct Options {
     pub replays: bool,
     /// Race this run's top genomes live.
     pub watch: Option<String>,
+    /// Review this run's drivers on a grid, to pick some to boost.
+    pub review: Option<String>,
     /// Record the replay (or the genome's run on the track) to this video
     /// file, then exit. A folder (existing, or ending in `/`) gets a file
     /// named after the replay.
@@ -54,7 +57,7 @@ pub struct Options {
 
 impl Options {
     /// `[--seed N | --track path] [--map] [--generator] [--tracks [--run run | --set file]] [--genome path | --follow run] [--net]
-    /// [--replay file | --replays run | --watch run] [--video out.mp4] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
+    /// [--replay file | --replays run | --watch run | --review run] [--video out.mp4] [--screenshot <path> [--frames N]] [--autopilot] [--donut]`
     pub fn from_args() -> Self {
         let mut options = Self::default();
         let mut frames = 240;
@@ -78,6 +81,7 @@ impl Options {
                 "--charts" => options.charts = true,
                 "--replay" => options.replay = args.next().map(PathBuf::from),
                 "--watch" => options.watch = args.next(),
+                "--review" => options.review = args.next(),
                 "--video" => options.video = args.next().map(PathBuf::from),
                 "--replays" => {
                     // A run's newest replay, with the picker open.
@@ -112,6 +116,12 @@ impl Options {
 impl App {
     /// Esc: back to the screen this one was opened from, or quit.
     fn back_out(&mut self) -> Flow {
+        // From a full view: back to the review grid first.
+        if let Screen::Review(review) = &mut self.screen
+            && review.back()
+        {
+            return Flow::Continue;
+        }
         let previous = match &mut self.screen {
             // The launcher's pick: done.
             Screen::Tracks(tracks) if tracks.locked => return Flow::Exit,
@@ -123,7 +133,7 @@ impl App {
                 })
             }
             Screen::Play(_) => self.tracks_return.take().map(Screen::Tracks),
-            Screen::Replay(_) | Screen::Watch(_) => self.back.take().map(Screen::Play),
+            Screen::Replay(_) | Screen::Watch(_) | Screen::Review(_) => self.back.take().map(Screen::Play),
         };
         let Some(previous) = previous else { return Flow::Exit };
         if let Screen::Play(play) = std::mem::replace(&mut self.screen, previous) {
@@ -148,6 +158,7 @@ impl App {
                 Ok(Screen::Play(play))
             }
             Switch::Watch(run) => Ok(Screen::Watch(Box::new(WatchScreen::new(run, false)))),
+            Switch::Review(run) => Ok(Screen::Review(Box::new(ReviewScreen::new(run)))),
             Switch::Replays(run) => {
                 let dir = common::paths::workspace_path("runs").join(run);
                 replay::newest(&dir)
@@ -161,13 +172,14 @@ impl App {
                 Screen::Play(play) => self.back = Some(play),
                 // Driving a track from here: Esc comes back.
                 Screen::Tracks(tracks) => self.tracks_return = Some(tracks),
-                // Watch <-> replays: the play screen (if any) stays put.
-                Screen::Replay(_) | Screen::Watch(_) => {}
+                // Watch <-> replays <-> review: the play screen (if any) stays put.
+                Screen::Replay(_) | Screen::Watch(_) | Screen::Review(_) => {}
             },
             Err(err) => match &mut self.screen {
                 Screen::Play(play) => play.notify(err),
                 Screen::Replay(replay) => replay.notify(err),
                 Screen::Watch(watch) => watch.notify(err),
+                Screen::Review(review) => review.notify(err),
                 Screen::Tracks(tracks) => tracks.notify(err),
             },
         }
@@ -184,6 +196,7 @@ enum Screen {
     Play(Box<PlayScreen>),
     Replay(Box<ReplayScreen>),
     Watch(Box<WatchScreen>),
+    Review(Box<ReviewScreen>),
     Tracks(Box<TracksScreen>),
 }
 
@@ -212,6 +225,10 @@ impl App {
                 watch.open_network();
             }
             return Self { screen: Screen::Watch(Box::new(watch)), options, back: None, tracks_return: None, frame: 0 };
+        }
+        if let Some(run) = &options.review {
+            let screen = Screen::Review(Box::new(ReviewScreen::new(run)));
+            return Self { screen, options, back: None, tracks_return: None, frame: 0 };
         }
         if options.tracks || options.set.is_some() {
             let (source, locked) = match (&options.set, &options.run) {
@@ -284,6 +301,11 @@ impl App {
                 watch.update(dt);
                 watch.draw();
                 watch.take_switch()
+            }
+            Screen::Review(review) => {
+                review.update(dt);
+                review.draw();
+                review.take_switch()
             }
             Screen::Tracks(tracks) => {
                 tracks.update(dt);

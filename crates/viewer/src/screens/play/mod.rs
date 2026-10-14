@@ -279,6 +279,10 @@ impl PlayScreen {
     }
 
     pub fn draw(&mut self) {
+        if self.dashboard.open {
+            self.dashboard.draw();
+            return;
+        }
         if self.net_view == NetView::Full {
             self.draw_network_view();
             self.draw_status(screen_width());
@@ -308,7 +312,8 @@ impl PlayScreen {
 
         set_default_camera();
         let view_w = self.track_width();
-        hud::draw(&state, &car.params, view_w);
+        let bottom = self.hud_bottom(view_w);
+        hud::draw_at(&state, &car.params, view_w, bottom);
         hud::draw_track_info(&self.world, view_w);
         self.score_hud.draw(&self.scorer, view_w);
         if self.show_telemetry {
@@ -317,7 +322,7 @@ impl PlayScreen {
                 telemetry::draw_panel(&state, &car.params, view_w);
                 self.history.draw();
             }
-            driver_prep_panel::draw(&self.world, view_w);
+            driver_prep_panel::draw_at(&self.world, view_w, bottom);
         }
         if self.show_gamepad {
             gamepad_panel::draw(&self.input.gamepad);
@@ -452,10 +457,12 @@ impl PlayScreen {
     }
 
     fn handle_keys(&mut self) {
-        if is_key_pressed(KeyCode::Tab)
-            && let Some(ai) = &mut self.ai
-        {
-            ai.enabled = !ai.enabled;
+        // The dashboard covers the screen and takes the input while open.
+        if self.dashboard.open {
+            if is_key_pressed(KeyCode::C) {
+                self.dashboard.open = false;
+            }
+            return;
         }
         if is_key_pressed(KeyCode::V) && self.ai.is_some() {
             self.net_view = match self.net_view {
@@ -519,7 +526,10 @@ impl PlayScreen {
                 self.switch = Some(super::Switch::Watch(run.clone()));
             }
             if is_key_pressed(KeyCode::J) {
-                self.switch = Some(super::Switch::Replays(run));
+                self.switch = Some(super::Switch::Replays(run.clone()));
+            }
+            if is_key_pressed(KeyCode::U) {
+                self.switch = Some(super::Switch::Review(run));
             }
         }
         if is_key_pressed(KeyCode::X) && self.ai.is_some() {
@@ -647,6 +657,8 @@ impl PlayScreen {
         let split = self.net_view == NetView::Split;
         // Under a fullscreen network view they share the strip at the bottom.
         let full = self.net_view == NetView::Full;
+        // Otherwise they sit just above the dash.
+        let dash_top = self.hud_bottom(w) - hud::DASH_H;
         if !status.is_empty() {
             let line = status.join("   ");
             let natural = measure_text(&line, None, 28, 1.0).width;
@@ -657,7 +669,7 @@ impl PlayScreen {
             } else if full {
                 h - 12.0
             } else {
-                h - 70.0
+                dash_top - 14.0
             };
             text(&line, ((w - width) / 2.0).max(16.0), y, size, theme::SODIUM);
         }
@@ -672,28 +684,39 @@ impl PlayScreen {
                 } else if full {
                     h - 44.0 - from_bottom
                 } else {
-                    h - 100.0 - from_bottom
+                    dash_top - 44.0 - from_bottom
                 };
                 text(line, ((w - width) / 2.0).max(16.0), y, 22.0, theme::NEON_CYAN);
             }
         }
 
-        let help: &[&str] = if self.show_help && self.net_view != NetView::Full {
+        let (help, size) = self.help(w);
+        for (i, line) in help.iter().rev().enumerate() {
+            text(line, 16.0, h - 8.0 - i as f32 * (size + 2.0), size, theme::TEXT_DIM);
+        }
+    }
+
+    /// The help lines, and the font size that fits the widest in `w`.
+    fn help(&self, w: f32) -> (&'static [&'static str], f32) {
+        let help: &'static [&'static str] = if self.show_help && self.net_view != NetView::Full {
             &[
                 "pad: stick steer  RT throttle  LT brake  A/RB handbrake  X/LB clutch  Start reset",
                 "keys: WASD/arrows  Space handbrake  Shift clutch  R reset  P pause  [ ] speed  wheel zoom",
                 "N new track  F generator  L next library track  O tracks  K keep track  M map  E effects  T telemetry  G gamepad  C run charts  H help",
-                "Y / pad Select: restart a stalled engine   AI (--genome / --follow): Tab take over  I inputs  V network  B newest best  X save last run  Q top cars  J replays",
+                "Y / pad Select: restart a stalled engine   AI (--genome / --follow): I inputs  V network  B newest best  X save last run  Q top cars  J replays  U review grid",
             ]
         } else {
             &["H: help"]
         };
         // Shrink the help to fit beside the network view.
         let widest = help.iter().map(|l| measure_text(l, None, 16, 1.0).width).fold(0.0, f32::max);
-        let size = (16.0 * (w - 32.0) / widest).clamp(10.0, 16.0);
-        for (i, line) in help.iter().rev().enumerate() {
-            text(line, 16.0, h - 8.0 - i as f32 * (size + 2.0), size, theme::TEXT_DIM);
-        }
+        (help, (16.0 * (w - 32.0) / widest).clamp(10.0, 16.0))
+    }
+
+    /// Bottom edge of the HUD in a track view `w` wide: just above the help.
+    fn hud_bottom(&self, w: f32) -> f32 {
+        let (help, size) = self.help(w);
+        screen_height() - 16.0 - help.len() as f32 * (size + 2.0)
     }
 }
 

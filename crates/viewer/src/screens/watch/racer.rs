@@ -52,7 +52,7 @@ pub struct Racer {
 impl Racer {
     pub fn new(entry: TopEntry, genome: &SavedGenome, header: &TopHeader, track: Arc<Track>, seed: u64) -> Self {
         let network = Network::new(genome.header.spec.clone(), genome.params.clone());
-        let mut driver = Driver { nn: NnDriver::new(network), last: None, decisions: 0 };
+        let mut driver = Driver { nn: NnDriver::new(network, &header.episode), last: None, decisions: 0 };
         driver.reset();
         let episode = Episode::new(track, header.car.clone(), header.scoring.clone(), header.episode.clone(), seed);
         let s = &episode.world.car.state;

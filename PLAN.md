@@ -10,30 +10,28 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `viewer`: free-drive screen with gamepad/keyboard, telemetry, smoke, skid marks, live car.toml reload
 
 **Done: M1**
-- Done:
-  - Bezier tracks (`sim/track`), hard/soft edges, verge grip
-  - wall collisions (`sim/world`)
-  - track rendering, sparks, cosmetic bumper damage
-  - zones and scoring (`sim/scoring`, `config/scoring.toml`), score HUD with popups
-  - corner analysis (`track/corners.rs`) and driver prep (`sim/sensors/driver_prep.rs`)
-  - procedural drift-track generator with figure-8 crossroads (`track/generator/`, `track/crossings.rs`, `config/generator.toml`)
-  - viewer: `N` new track, `F` generator panel (sliders, save as defaults), `K` keep track, `M` map view
-  - track, car, scoring and generator files all hot-reload in the viewer
+- Bezier tracks (`sim/track`), hard/soft edges, verge grip
+- wall collisions (`sim/world`)
+- track rendering, sparks, cosmetic bumper damage
+- zones and scoring (`sim/scoring`, `config/scoring.toml`), score HUD with popups
+- corner analysis (`track/corners.rs`) and driver prep (`sim/sensors/driver_prep.rs`)
+- procedural drift-track generator with figure-8 crossroads (`track/generator/`, `track/crossings.rs`, `config/generator.toml`)
+- viewer: `N` new track, `F` generator panel (sliders, save as defaults), `K` keep track, `M` map view
+- track, car, scoring and generator files all hot-reload in the viewer
 
 **Done: M2** (a run reached ~0.94 laps of unseen library tracks by gen 60)
-- Done:
-  - `sim`: observation (111 inputs, layout in `sensors/observation.rs`), `Controller` trait, `episode.rs` (rolling start, early termination, stats)
-  - `nn` (own network library), `agent` (network driver, `.genome` files), `evo` (islands, neuron-level crossover, self-adaptive mutation, curriculum)
-  - `train`: headless trainer with `config/training.toml`, `runs/<name>/` (metrics.csv, best.genome, checkpoints, config snapshot)
-  - viewer `--genome` watch mode (`Tab` take over, `I` inputs panel)
-  - live follow: `viewer --follow <run>`
-  - clutch heat/fade and stalling (stops the AI riding the clutch), with clutch metrics in the trainer
-  - network view (`V`, pulled forward from M4): live layers, edges, inspect, neuron health
-  - drift shaping from gen 0, Pareto selection, stage-change reseed, behaviour diversity and drift metrics (after `runs/1` learned to grip-drive)
+- `sim`: observation (111 inputs, layout in `sensors/observation.rs`), `Controller` trait, `episode.rs` (rolling start, early termination, stats)
+- `nn` (own network library), `agent` (network driver, `.genome` files), `evo` (islands, neuron-level crossover, self-adaptive mutation, curriculum)
+- `train`: headless trainer with `config/training.toml`, `runs/<name>/` (metrics.csv, best.genome, checkpoints, config snapshot)
+- viewer `--genome` watch mode (`I` inputs panel; its `Tab` take-over key was removed after run9)
+- live follow: `viewer --follow <run>`
+- clutch heat/fade and stalling (stops the AI riding the clutch), with clutch metrics in the trainer
+- network view (`V`, pulled forward from M4): live layers, edges, inspect, neuron health
+- drift shaping from gen 0, Pareto selection, stage-change reseed, behaviour diversity and drift metrics (after `runs/1` learned to grip-drive)
 
 **In progress: M3**
 - Done: library tracks carry a `test` flag (on unless `test = false`, e.g. the skidpad); the trainer tests only on those.
-- Done: run dashboard in the viewer (`C` / `--charts`): fitness, drift quality, angle, pedals, diversity, end reasons, from `metrics.csv`.
+- Done: run dashboard in the viewer (`C` / `--charts`): four pages of charts from `metrics.csv`, with headline numbers and trend lines. See *Network view & metrics › Run dashboard*.
 - Done: library panel (`O` / `--library`): every track in `tracks/`, click to drive, toggle the test set, rename, delete (moved to `tracks/deleted/`). `L` cycles the library. Now replaced by the track screen.
 - Done: polish phase (`polish` on a stage) and a sturdier best.genome (`[best]`: top 5 re-run on 6 extra tracks).
 - Done: track pool (`tracks.pool` + `pool_per_generation`): each generation draws a few saved tracks; the `[best]` check runs take pool tracks first. Set in `cargo drift`: when starting a run, or on resume ("Change its tracks?", saved into the run's config).
@@ -41,6 +39,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - Done: `runs/<run>/tracks.csv` and the "this generation" strip on the track screen.
 - Done: Results tab (`Tab` on the track screen, with a run picked): per-track results over the last N generations, worst first, and the worst generated tracks to keep.
 - Done: run8 prep (after run7): three Pareto objectives (driving, flow, judged score), a smoothness penalty on sawing the throttle and steering, and stricter judging against jiggles (angle credit from 20°, drifts under 1 s bank nothing, transitions need 1.5 s sides and pay by the angle held). See *Training* and *Scoring*.
+- Done: steering as a rate for new runs (`[episode] steering`, see *Outputs*): the dash wheel showed run8 sawing its steer request ~4 times a second. Old runs keep position steering.
 - Next: Generate tab (see *Tracks › Track manager*).
 - Then: M3's features are in; what's left is user-led training to get cars drifting through drive -> slide -> judged (and, once judged works, polishing).
 
@@ -48,7 +47,9 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - Done: replays (see *Replays*): the trainer records the saved best every `replays.every` gens; the viewer plays them back (`--replays <run>`), and `X` saves the last AI run.
 - Done: video export (see *Replays › Video export*): `R` in a replay, `--video`, or the launcher's "Export video…" writes a small MP4.
 - Done: live multi-car viewer (see *Live multi-car viewer*): `--watch <run>` races the run's `top.genomes` together.
-- Next: the human review grid, then visual polish.
+- Done: driver dash (`render/hud.rs`): one bottom-centre panel with speed (mph), drift angle, tach, clutch temp, a steering wheel (turns with the steer request, ±270°; a cyan dot marks the actual rack) and clutch / brake / throttle / handbrake bars. On the play screen it sits above the help text.
+- Done: human review (see *Human review*): `--review <run>` shows 12 of the run's drivers on a 4×3 grid; picked ones are sent to the trainer, which protects them for 50 gens and floods their island with their children.
+- Next: visual polish.
 
 **Conventions**
 - The sim uses `f64` (SI units). The NN will use `f32`.
@@ -69,7 +70,8 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - `cargo run -p viewer -- --follow <run>`: watch a run live (picks up each new best between runs)
 - `--track tracks/<file>.toml` on any viewer command: drive/watch on that saved track instead of `generated_1` (the fallback when it's gone: `config/default_track.toml`, a copy built into the viewer)
 - `V` while an AI drives: network view (add `--net` to start with it open)
-- `cargo run -p viewer -- --watch <run>`: the run's top genomes racing live (Tab / click to follow, `O` leaderboard)
+- `cargo run -p viewer -- --watch <run>`: the run's top genomes racing live (`F` / click to follow, `O` leaderboard, `Tab` its details, `D` driver info, `U` review grid)
+- `cargo run -p viewer -- --review <run>`: the review grid: pick drivers for the trainer to boost (`U` from watch or while following a run)
 - While following a run (`--follow`): `Q` opens its top cars, `J` its replays (`Q` / `J` also switch between those two); Esc goes back. `cargo drift` → Runs → a run has the same two options
 - `cargo run -p viewer -- --replays <run>`: watch a run's replays (newest first, picker open); `--replay <file>` for one file; `X` while an AI drives saves its last run
 - `cargo run -p viewer -- --replay <file> --video <out.mp4 | folder/>`: record a replay to MP4 and exit. `--genome <path> | --follow <run>` with `--track <toml> | --seed N` instead drives that genome on the track first (saved as `replays/video_gNNNNN_<track>.replay`). `R` in the replay screen does the same for the open replay
@@ -87,7 +89,7 @@ A top-down 2D drift game where cars are driven by small neural networks trained 
 - **Wall taps:** a light, controlled rear-bumper tap on a hard wall (e.g. in an outer zone) earns a **Style bonus**. This is JDM drift.
 - **Driver prep:** before a run, the track is analysed into a list of corners. While driving, the car "knows" the next few corners before it can see them, so it can pre-plan entries.
 - **Agent:** a fixed-size neural net reads sensors (raycasts, car state, driver prep) and outputs controls.
-- **Training:** a genetic algorithm evolves the network weights, guided by a shaped fitness function and periodic human review. There is no backprop in v1.
+- **Training:** a genetic algorithm evolves the network weights, guided by a shaped fitness function and human picks. There is no backprop in v1.
 - **Aesthetic:** JDM night style (sodium lights, neon, katakana HUD, coloured tyre smoke) on a Formula Drift-style course.
 
 ## Design decisions
@@ -250,7 +252,7 @@ Outputs are produced once per decision and held until the next one.
 
 | Output | Activation | What it does |
 |---|---|---|
-| Steer | tanh (-1..1) | target steering angle as a fraction of full lock; the wheels move toward it at a limited rate |
+| Steer | tanh (-1..1) | `[episode] steering`: `rate` (run9 on) = how fast to turn the wheel, full output going lock to lock in `full_lock_secs`, added up by the driver so the request can't jitter; `position` (run8 and older) = target angle as a fraction of full lock. Either way the road wheels follow at the rack's rate |
 | Throttle | sigmoid (0..1) | engine power |
 | Brake | sigmoid (0..1) | foot brake, front-biased. Separate from throttle so left-foot braking is possible |
 | Handbrake | sigmoid (0..1) | rear brake strength; used to start or extend a drift |
@@ -267,16 +269,34 @@ Outputs are produced once per decision and held until the next one.
 - **Islands:** several sub-populations, each with its own network shape and activation functions. Breeding happens within an island only. Periodically the worst island is replaced with a copy of the best.
 - **Crossover:** neuron-level (a child takes each hidden neuron's whole incoming weight set from one parent).
 - **Mutation:** Gaussian noise on a random subset of weights, plus a rare large reset. σ shrinks over time or self-adapts per genome.
-- **Fitness (shaped from gen 0):** driving reward (progress, capped after stage 1, plus time alive) multiplied by (1 + drift_bonus × drift quality), where drift quality is *flow*. Banked judged score (Line/Angle/Style) counts in the final stage. Stages: drive → slide → judged. Shaping stages soften the scoring (drift from 5°, flat speed multiplier, spins don't end the run, no bobble penalty).
-- **Flow (drift quality, `[flow]` in scoring.toml):** came in after the slide stage learned to wiggle (quick left/right flicks paid the same raw angle-time as long arcs, and were safer). Each second drifting earns the angle points' shape (full at 40–65°, tapering towards a spin) × a hold credit: 0 → 1 over the first 1 s on one side, then up to 1.5 by 3 s. A link carries 75% of the hold (up to `link_cap_secs` = 3 s, so the bonus crosses) into the next side; a quicker flick, an end or a spin starts it again. Linking is looser than judging: a side held `link_min_hold_secs` (0.75 s) links even under judging's 1.5 s transition rule. Added in run9 at gen ~1160, after its cars flicked into corner 1 then straightened up instead of linking corner 2 (a sub-1.5 s side reset flow just like gripping, so linking paid nothing). Files without the keys keep the old rule (judged transitions only, ramp only). Quality = flow-seconds ÷ the run's time limit (`max_secs`; 1.0 = a full-angle drift, each side held past the ramp, the whole run). Until run8 it was ÷ the time the run lasted, so a car that spun out at 10 s kept a high quality; now a spin on the last corner costs ~8% and one at 10 s ~83%. Older files without the limit fall back to the time lasted. Rewards long sweeping drifts without penalising anything. Quality numbers from before the switch aren't comparable. Metrics: `drift_hold` / `top_hold` (seconds per side), and the console's `side` column; the viewer HUD shows the live `flow x` credit.
+- **Fitness (shaped from gen 0):** driving reward × (1 + drift_bonus × drift quality).
+  - Driving reward: progress (capped after stage 1) plus time alive.
+  - Drift quality is *flow* (below).
+  - Stages: drive → slide → judged. The banked judged score (Line/Angle/Style) counts in the judged stage.
+  - Shaping stages soften the scoring: drift from 5°, flat speed multiplier, spins don't end the run, no bobble penalty.
+- **Flow (drift quality, `[flow]` in scoring.toml):** rewards long sweeping drifts without penalising anything.
+  - Each second drifting earns the angle points' shape (full at 40–65°, tapering towards a spin) × a hold credit.
+  - Hold credit: 0 → 1 over the first 1 s on one side, then up to 1.5 by 3 s.
+  - A link carries 75% of the hold into the next side (up to `link_cap_secs` = 3 s, so the bonus crosses over). A quicker flick, an end or a spin starts it again.
+  - Linking is looser than judging: a side held `link_min_hold_secs` (0.75 s) links, even though judging needs 1.5 s for a transition. Files without the keys keep the old rule (judged transitions only, ramp only).
+  - Quality = flow-seconds ÷ the run's time limit (`max_secs`). 1.0 = a full-angle drift, each side held past the ramp, for the whole run. A spin on the last corner costs ~8%, one at 10 s ~83%. Older files without the limit fall back to ÷ time lasted.
+  - Metrics: `drift_hold` / `top_hold` (seconds per side) and the console's `side` column. The viewer HUD shows the live `flow x` credit.
+  - Why: the slide stage learned to wiggle. Quick left/right flicks paid the same raw angle-time as long arcs, and were safer.
+  - History: until run8, quality was ÷ the time the run lasted, so a car that spun out at 10 s kept a high quality. Linking came in at run9 gen ~1160: its cars flicked into corner 1 then straightened up instead of linking corner 2, because a sub-1.5 s side reset flow just like gripping. Quality numbers from before each switch aren't comparable.
 - **Clutch penalty (`clutch` per stage):** a press shorter than 0.4 s is a kick and is free. Holding the clutch any longer counts, each second weighted by drift angle (0.25 with no angle, rising to 1 at 45°). The run's reward and both Pareto objectives are scaled by 1 − strength × (weighted hold time ÷ run time), never below 0. Strength 2 in every stage. Logged as `clutch_hold` / `clutch_hold_angle`.
-- **Smoothness penalty (`smoothness` per stage):** sawing a control while drifting (changing direction by ≥ 0.2 throttle / 0.3 steer within 0.3 s of its last change of direction; `[episode] smoothness`, `sim/src/smoothness.rs`) scales the drift and judged objectives (and their part of fitness) by 1 − throttle × throttle saws/s − steer × steer saws/s, never below 0. Single swings (a lift, a counter-steer catch, a transition) are free. Steering is cheap on purpose: the car has no self-steer, so catching a slide takes real steering. Came in after run7: its gen-3290 best sawed the throttle ~0.8–2.5 and the steering ~7–16 times a second drifting. Weights: slide 0.08 / 0.01, judged 0.15 / 0.02. Logged as `best_/mean_throttle_saws`, `best_/mean_steer_saws` and the console's `saws/s` columns.
+- **Smoothness penalty (`smoothness` per stage, `sim/src/smoothness.rs`):** penalises sawing a control while drifting.
+  - A saw: changing direction by ≥ 0.2 throttle / 0.3 steer within 0.3 s of its last change of direction (`[episode] smoothness`). Single swings (a lift, a counter-steer catch, a transition) are free.
+  - Scales the drift and judged objectives (and their part of fitness) by 1 − throttle weight × throttle saws/s − steer weight × steer saws/s, never below 0.
+  - Weights: slide 0.08 / 0.01, judged 0.15 / 0.02. Steering is cheap on purpose: the car has no self-steer, so catching a slide takes real steering.
+  - Logged as `best_/mean_throttle_saws`, `best_/mean_steer_saws` and the console's `saws/s` columns.
+  - Why: run7's gen-3290 best sawed the throttle ~0.8–2.5 and the steering ~7–16 times a second while drifting.
 - **Selection:** Pareto ranking over (driving, drift quality, judged score) inside each island, so slidey crashers survive alongside grip drivers. The judged score (line/angle/style weighted, less penalty) only became an objective after run7: until then the judged stage's weights only fed `fitness` (saved best, logs), so judged points never chose who bred. Logged as `best_judged`.
 - **Stage change:** σ resets and 30% of each island is reseeded with heavily mutated copies of its best.
 - **Starting priors:** calm start (straight, some throttle, brake off, handbrake/clutch light).
 - **Early termination:** a crash, spin, or no progress for a few seconds ends the episode.
 - **Diversity:** small tournaments, a few random immigrants per generation; diversity is tracked in behaviour space (lap share, drift share, angle, handbrake, clutch) as well as weight space.
 - **Polish phase:** an optional `polish` block on a curriculum stage: smaller σ (reset on entry, no reseed), no immigrants, more generated tracks per generation. Every genome, elites included, is already re-evaluated on fresh tracks each generation.
+- **Human picks (`[review]`):** see *Human review*.
 - **Saved best (`[best]`):** the top few genomes by fitness also drive some extra tracks (pool tracks not drawn this generation, then generated); the best over all its runs is saved as best.genome, judges curriculum advance and runs the test set, so a lucky draw can't replace a steadier driver.
 - **Monitoring:** see *Network view & metrics*.
 
@@ -305,17 +325,29 @@ Outputs are produced once per decision and held until the next one.
 - **What:** `--watch <run>`: the run's top genomes drive one track together, live, from the same rolling start. Ghosts (no car-to-car contact); each runs exactly as in training.
 - **Which:** the trainer writes `runs/<run>/top.genomes` every generation (atomically): the top `watch.per_island` (5) of each island by fitness, plus the `watch.drifters` (10) best by drift quality not already in. The file carries the stage's actual rules (episode, scoring, car), so cars run under the rules they were scored on. A newer file is picked up when the current heat ends.
 - **Look:** cars coloured by island (validated palette), the followed car highlighted. Full effects (smoke, sparks, damage) on the followed car; every car leaves skid marks. Finished cars stay where they stopped, faded.
-- **Controls:** click a car or `Tab` to follow it; leaderboard panel (rank, island, score, angle, status; click a row); `M` map; `V` network and `I` inputs for the followed car; `R` restart the heat; `L` / `N` change track (default: the run's fixed track).
+- **Controls:** click a car or `F` to follow it; leaderboard panel (rank, island, score, angle, status; click a row; `Tab` expands it); `D` driver info; `M` map; `V` network and `I` inputs for the followed car; `R` restart the heat; `L` / `N` change track (default: the run's fixed track).
+- **Expanded leaderboard (`Tab`):** a wide table: place, island, fitness rank and network, fitness, drift quality, age (gens since born), live points, progress, angle or end. Click a column heading to sort by it (default: live points).
+- **Driver info (`D`):** a panel for the followed car: who it is (rank, island, network, genome id, fitness, drift quality); lineage (born, age, sigma, parents and children, clickable when racing in the heat); its training runs this generation (objectives driving / flow / judged, mean line / angle / style / penalty, laps, progress, how runs ended); and this heat live (points split, progress, drifting %, above-20° %, biggest angle, spins, zones, clips, transitions).
+- **Data:** each `top.genomes` entry also carries `born`, `parents`, `sigma`, `objectives` and a `training` summary. Files written before that still load; age, lineage and training show as unknown until the run is resumed.
 
 ## Human review
 
-- **When:** every N generations (default 25), training pauses for review. It auto-continues if there's no input after a timeout.
-- **What:** a 5×5 grid of 25 synced replays on one track (random from the library, or picked by you). Roughly 15 top scorers plus 10 interesting outliers.
-- **Controls:** click a tile for fullscreen; speed control; mark each car ★ love / ✓ good / ✗ bad (✗ usually means a scoring exploit to fix).
-- **How ratings feed back:**
-  1. ★ genomes are protected as elites and get extra breeding slots.
-  2. Their descendants get a fitness bonus that fades over generations.
-  3. *(Later)* A learned style critic: ratings + run stats are fitted to a small model that becomes the automatic Style score.
+- **When:** whenever you like. Training never pauses; picks reach the trainer at the end of its current generation. If the trainer isn't running, they wait for the next resume.
+- **Where:** the review grid (`--review <run>`, `U` on the watch screen or while following a run, or the launcher's run menu → "Review drivers"; `screens/review/`).
+  - **Who:** 12 tiles, 4 across and 3 down (25 was too many to take in): the 8 fittest, then a row of the 4 best drifters from `top.genomes`, re-run live from the same rolling start exactly as in training (the watch screen's `Racer`), one follow camera per tile. Replays aren't used: they hold only the saved best and no genome ids.
+  - **Tiles** show the car, its skid marks, rank, network, island colour, live points, and its angle or how it ended.
+  - **Controls:** click a tile for a full view (dash, smoke, driver info), Esc back to the grid; `P` / right-click picks the car; Enter or the "Send" button sends the picks; Backspace clears them; `R` restarts the heat; `L` / `N` change track; Space pauses; `[` `]` speed; wheel zooms.
+  - A newer `top.genomes` waits for the next heat, and for unsent picks to be sent or cleared.
+  - Tiles mark PICKED, SENT (waiting for the trainer) and BOOSTED (applied); the status line says which generation applied the latest send.
+- **Channel (`agent::picks`):** each send is one file in `runs/<run>/picks/inbox/`, in the top.genomes format, so it carries the genome (it may be bred out before the trainer reads it). The trainer moves each file to `picks/applied/g<gen>_<file>` (the record of what was boosted when) or `picks/rejected/`.
+- **What a pick does (`[review]` in training.toml, `train/src/picks.rs`):**
+  - It goes to its own island, or another with the same network shape (a migration may have replaced its island). No match: skipped, with a log line.
+  - **Protected** for `protect_gens` (50) generations: carried unchanged after the elites, even if bred out already, and migration never overwrites its island. Saved in checkpoints.
+  - **Flood:** `flood_fraction` (30%) of its island is replaced straight away by mutated children of it (its own sigma; lineage kept, so driver info shows them). Several picks in one island share the flood.
+  - Logged in train.log: `== pick #id (island i): protected to gen M, K children`.
+- **Determinism:** picks are outside input. Resuming from a checkpoint taken before a pick doesn't re-apply it (its file has already moved to `applied/`).
+- **Dropped from the first design:** the forced pause every N gens with a timeout, ✓ good / ✗ bad marks, and a fading fitness bonus for descendants.
+- *(Later)* A learned style critic: picks + run stats fitted to a small model that becomes the automatic Style score.
 
 ## Network view & metrics
 
@@ -328,10 +360,10 @@ Outputs are produced once per decision and held until the next one.
 - **Inspect:**
   - hover a node to see its edges, label, value, pre-activation and bias
   - click to pin it, which lists its top contributors (e.g. "steer ← side vel −0.42")
+  - right-click to hide a node's edges (marked with a ring), so a loud input doesn't crowd out the rest; the strongest-X% cut and edge thickness then rank only what's shown. A "show all" chip clears them
 - **Outputs** show a value bar and a ~5 s sparkline each.
 - **Neuron health:** a rolling 5 s window marks **dead** neurons (never change) and **saturated** ones (pinned at the activation's limits), with counts per layer.
-- While you've taken over (`Tab`) the view freezes.
-- *(Later)* An info panel with island, fitness breakdown, parents and ratings, opened from any car in the overlay, the review grid or a replay.
+- Driver info for the followed car in the multi-car view: see *Live multi-car viewer*. The review grid's full view shows it too. *(Later)* the same from a replay.
 
 **Generation metrics:**
 - **Fitness:** best / mean / median / worst, overall and per island
@@ -349,7 +381,18 @@ Outputs are produced once per decision and held until the next one.
   - generation time
   - sim steps per second
 - **Generalisation:** best genome's score on the held-out test tracks, every N generations
-- **Shown as:** a dashboard panel in the viewer, with graphs over generations and human-review points marked. The trainer also writes a per-generation CSV log.
+- **Logged as:** one row per generation in `runs/<run>/metrics.csv`. *(Later)* human picks marked on the charts, read from `runs/<run>/picks/applied/` (a resumed run keeps its old CSV columns, so a column wouldn't show up in older runs).
+
+**Run dashboard (`C` / `--charts`, `viewer/src/dashboard/`):** the followed run's `metrics.csv`, updating live as the trainer writes. It covers the screen and takes the keys and mouse while open.
+- **Pages** (`1`–`4` or click a tab; `pages.rs`). Columns a run never logged are left out.
+  - **Overview:** fitness (+ test tracks), drift quality, time above 20°, how runs end, pedal use, behaviour diversity
+  - **Scoring:** line / angle / style / penalty for the saved driver and the population, judged objective, top drifter's score, drift angle, seconds per side
+  - **Driving:** progress, laps (+ test tracks), biggest angle per run, sawing per second, spins, zones
+  - **Health:** best per island, fitness spread, weight diversity, sigma, seconds per generation, sim speed
+- **Headline numbers** under the title (`kpi.rs`): best this stage (fitness is shaped per stage, so only this stage counts), the best's trend over 100 gens, generation time, the saved driver's fitness and rank, and time since the last generation (amber when the trainer looks stalled). Beside them, the saved driver against the stage's gate.
+- **Reading charts:** legends show the latest generation, or the hovered one, or the one pinned by a click. The tooltip adds each series' trend and its change. Dashed lines mark stage changes.
+- **Trend lines** (`trend.rs`): a trailing rolling mean, about 1/20 of the visible generations wide, never looking ahead (so the live right edge means the same as the rest). `S` cycles trend + raw / trend / raw.
+- **`Z`** narrows to the last 500, then 100 generations.
 
 ## Code structure & modularity
 
@@ -384,36 +427,43 @@ evo     ← train, viewer
 drift/
   Cargo.toml                 workspace
   PLAN.md
-  config/                    car.toml, training.toml, generator.toml (hot-reloaded where useful)
-  assets/                    fonts, textures, shaders
-  tracks/                    track library (approved + test tracks)
-  runs/                      (gitignored) checkpoints, metrics CSV, replays, ratings
+  config/                    car, scoring, training, generator (hot-reloaded where useful), default_track
+  tracks/                    track library (approved + test tracks; deleted/ holds removed ones)
+  runs/                      (gitignored) per run: metrics.csv, tracks.csv, best.genome, top.genomes,
+                             checkpoints, config snapshot, replays/, videos/, picks/, train.log
   crates/
-    common/src/              math (Vec2, angles), rng (PCG), config loading
+    common/src/              math (Vec2, angles), rng (PCG), config loading, paths, procs, toml_lines
     sim/src/
       car/                   params, state, wheel, tyre, suspension, engine (+clutch),
-                             drivetrain (diff), steering, step (integration)
-      track/                 bezier, geometry (walls), grid, zones, generator, library (load/save)
-      sensors/               rays, driver_prep, observation (input layout + normalisation), noise
-      scoring/               drift (detection), judge (line/angle/style), combo
+                             drivetrain (diff), steering, ground, step (integration)
+      track/                 bezier, centreline, boundary, grid, zones, corners, crossings, stats,
+                             generator/ (pieces, turtle, rejection), def (file format)
+      world/                 one car on one track: surface lookup, physics, collisions, progress
+      sensors/               rays, driver_prep, observation (input layout + normalisation)
+      scoring/               drift (detection), flow, combo, params
       controls.rs            the 5 outputs
       controller.rs          Controller trait
       episode.rs             run one car on one track, termination rules
-      frame.rs               replay state frame
-    nn/src/                  matrix, activation, layer (dense), network (sequential), init
-    agent/src/               nn_driver (Network → Controller), genome ↔ network mapping
-    evo/src/                 genome, population, island, selection, crossover (neuron-level),
-                             mutation, fitness (curriculum), review (ratings → selection), diversity
-    train/src/               main, config, runner (parallel eval), checkpoint, metrics (CSV),
-                             publish (send genomes to viewer)
-    launcher/src/            `cargo drift` menu: runs (status from runs/ + /proc), tracks, launch (build + spawn)
+      smoothness.rs          control sawing count
+      frame.rs, recording.rs replay state frames + sparse records
+    nn/src/                  matrix, activation, network (dense layers), init
+    agent/src/               driver (Network → Controller), genome_file, replay_file, top_file, picks (review inbox)
+    evo/src/                 genome, island, selection (Pareto), crossover (neuron-level),
+                             mutation, fitness (curriculum), diversity, config
+    train/src/               main, config, runner (parallel eval), checkpoint, metrics (CSV), tracks_log,
+                             picks (placing human picks)
+    launcher/src/            `cargo drift` menu: runs (status from runs/ + /proc), tracks, video, launch (build + spawn)
     viewer/src/
       main.rs, app.rs        screen state machine
-      input/                 gamepad, keyboard
-      screens/               play, watch (live overlay), replay, review (5×5 grid), dashboard
-      render/                camera, car, track, hud, theme (JDM palette)
-        effects/             particles, smoke, skidmarks, post
-      debug/                 telemetry, rays, network_view/ (layout, edges, health, inspect, outputs)
+      input/                 gamepad, keyboard, ai, autopilot
+      screens/               play, watch (live multi-car), review (4×3 pick grid), replay, tracks (track screen),
+                             library (track files)
+      dashboard/             run dashboard: pages, chart, kpi, trend, gate, metrics
+      render/                camera, car, track, ground, hud, score, thumb (map cards), theme (JDM palette)
+        effects/             smoke, skidmarks, sparks, damage
+      debug/                 telemetry, history, inputs, gamepad and driver prep panels,
+                             network_view/ (layout, edges, health, inspect, outputs)
+      video.rs               MP4 export via ffmpeg
 ```
 
 ## Milestones

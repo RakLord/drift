@@ -19,6 +19,17 @@ struct Header {
     next_id: u64,
     layout: String,
     islands: Vec<IslandHeader>,
+    /// Human picks still under protection (none in older files).
+    #[serde(default)]
+    protected: Vec<Protected>,
+}
+
+/// A human pick kept unchanged in its island until `until` (exclusive).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Protected {
+    pub id: u64,
+    pub island: usize,
+    pub until: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -41,6 +52,7 @@ pub struct Population {
     pub stage: usize,
     pub ids: Ids,
     pub islands: Vec<Island>,
+    pub protected: Vec<Protected>,
 }
 
 pub fn path(run_dir: &Path, generation: u32) -> PathBuf {
@@ -80,6 +92,7 @@ pub fn save(path: &Path, pop: &Population) -> io::Result<()> {
                     .collect(),
             })
             .collect(),
+        protected: pop.protected.clone(),
     };
     let text = toml::to_string(&header).map_err(io::Error::other)?;
     let mut w = io::BufWriter::new(std::fs::File::create(path)?);
@@ -131,7 +144,13 @@ pub fn load(path: &Path) -> io::Result<Population> {
         }
         islands.push(Island { index: ih.index, spec: ih.spec, genomes, fitness: vec![], objectives: vec![] });
     }
-    Ok(Population { generation: header.generation, stage: header.stage, ids: Ids(header.next_id), islands })
+    Ok(Population {
+        generation: header.generation,
+        stage: header.stage,
+        ids: Ids(header.next_id),
+        islands,
+        protected: header.protected,
+    })
 }
 
 #[cfg(test)]
@@ -148,13 +167,15 @@ mod tests {
         let (mut rng, mut ids) = (Rng::new(1), Ids::default());
         let spec = agent::driver_spec(vec![LayerSpec { size: 6, activation: Activation::Tanh }]);
         let islands = vec![Island::new(0, spec.clone(), &cfg, &mut rng, &mut ids), Island::new(1, spec, &cfg, &mut rng, &mut ids)];
-        let pop = Population { generation: 7, stage: 1, ids, islands };
+        let protected = vec![Protected { id: 3, island: 1, until: 57 }];
+        let pop = Population { generation: 7, stage: 1, ids, islands, protected };
         let dir = std::env::temp_dir().join(format!("drift-pop-{}", std::process::id()));
         let file = path(&dir, 7);
         save(&file, &pop).unwrap();
         let back = load(&file).unwrap();
         assert_eq!(back.generation, 7);
         assert_eq!(back.ids.0, pop.ids.0);
+        assert_eq!(back.protected, pop.protected);
         for (a, b) in back.islands.iter().zip(&pop.islands) {
             assert_eq!(a.genomes, b.genomes);
             assert_eq!(a.spec, b.spec);

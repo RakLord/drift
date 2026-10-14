@@ -282,6 +282,13 @@ impl ReplayScreen {
     }
 
     fn handle_keys(&mut self) {
+        // The dashboard covers the screen and takes the input while open.
+        if self.dashboard.open {
+            if is_key_pressed(KeyCode::C) {
+                self.dashboard.open = false;
+            }
+            return;
+        }
         if is_key_pressed(KeyCode::Space) {
             if self.tick >= self.end_tick() {
                 self.seek = Some(0.0);
@@ -383,6 +390,10 @@ impl ReplayScreen {
             // Just the track and the HUD, down to the bottom edge.
             self.draw_track_view(screen_width(), screen_height() - 16.0);
             self.record_frame();
+            return;
+        }
+        if self.dashboard.open {
+            self.dashboard.draw();
             return;
         }
         let view_w = self.track_width();

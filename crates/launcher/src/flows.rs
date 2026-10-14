@@ -209,6 +209,12 @@ impl App {
         Ok(format!("viewer racing {}'s top cars", run.name))
     }
 
+    /// The review grid: pick drivers for the trainer to boost.
+    pub fn review(&mut self, run: &Run) -> Flow {
+        self.children.viewer(&["--review".into(), run.name.clone()])?;
+        Ok(format!("viewer reviewing {}'s drivers", run.name))
+    }
+
     /// The run's replays, newest first.
     pub fn replays(&mut self, run: &Run) -> Flow {
         self.children.viewer(&["--replays".into(), run.name.clone()])?;
@@ -294,7 +300,7 @@ impl App {
             actions.push("Watch best driver");
         }
         if has_top {
-            actions.push("Watch top cars (multi-car)");
+            actions.extend(["Watch top cars (multi-car)", "Review drivers (pick to boost)"]);
         }
         if has_replays {
             actions.push("Replays");
@@ -314,6 +320,7 @@ impl App {
         match Select::new(&format!("{}:", run.name), actions).prompt()? {
             "Watch live" | "Watch best driver" => self.watch(run),
             "Watch top cars (multi-car)" => self.watch_top(run),
+            "Review drivers (pick to boost)" => self.review(run),
             "Replays" => self.replays(run),
             "Export video…" => crate::video::export(run),
             "Its tracks (maps)" => self.track_screen(Some(run)),

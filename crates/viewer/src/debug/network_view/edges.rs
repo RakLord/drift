@@ -57,20 +57,19 @@ pub fn layer_edges(net: &Network, layer: usize, source: &[f32], mode: Mode, layo
 }
 
 /// Draw the strongest `density` share of `edges` (sized against the
-/// layer's largest), then every edge touching `highlight` on top.
-pub fn draw(edges: &[Edge], layout: &Layout, density: f32, highlight: Option<Node>) {
-    let max = edges.iter().map(|e| e.value.abs()).fold(0.0f32, f32::max);
+/// layer's largest), then every edge touching `highlight` on top. Edges
+/// touching a `hidden` node are left out of the ranking, unless highlighted.
+pub fn draw(edges: &[Edge], layout: &Layout, density: f32, highlight: Option<Node>, hidden: &[Node]) {
+    let shown = strongest(edges, density, hidden);
+    let strength = |i: &usize| edges[*i].value.abs();
+    // Scale against what's shown, so hiding a loud node lets the rest speak.
+    let max = shown.iter().map(strength).fold(0.0f32, f32::max);
+    let max = if max > 0.0 { max } else { edges.iter().map(|e| e.value.abs()).fold(0.0f32, f32::max) };
     if max <= 0.0 {
         return;
     }
     let dim = if highlight.is_some() { 0.25 } else { 1.0 };
-    let keep = ((edges.len() as f32 * density).ceil() as usize).clamp(1, edges.len());
-    let mut order: Vec<usize> = (0..edges.len()).collect();
-    order.select_nth_unstable_by(keep - 1, |&a, &b| edges[b].value.abs().total_cmp(&edges[a].value.abs()));
-    order.truncate(keep);
-    // Weakest first, so the strong ones end up on top.
-    order.sort_unstable_by(|&a, &b| edges[a].value.abs().total_cmp(&edges[b].value.abs()));
-    for &i in &order {
+    for &i in &shown {
         line(&edges[i], layout, max, dim, 0.0);
     }
     if let Some(h) = highlight {
@@ -78,6 +77,21 @@ pub fn draw(edges: &[Edge], layout: &Layout, density: f32, highlight: Option<Nod
             line(e, layout, max, 1.0, 0.25);
         }
     }
+}
+
+/// Indices of the strongest `density` share of the edges not touching a
+/// `hidden` node, weakest first (so the strong ones draw on top).
+fn strongest(edges: &[Edge], density: f32, hidden: &[Node]) -> Vec<usize> {
+    let mut order: Vec<usize> =
+        (0..edges.len()).filter(|&i| !hidden.contains(&edges[i].from) && !hidden.contains(&edges[i].to)).collect();
+    if order.is_empty() {
+        return order;
+    }
+    let keep = ((order.len() as f32 * density).ceil() as usize).clamp(1, order.len());
+    order.select_nth_unstable_by(keep - 1, |&a, &b| edges[b].value.abs().total_cmp(&edges[a].value.abs()));
+    order.truncate(keep);
+    order.sort_unstable_by(|&a, &b| edges[a].value.abs().total_cmp(&edges[b].value.abs()));
+    order
 }
 
 fn line(e: &Edge, layout: &Layout, max: f32, dim: f32, min_alpha: f32) {
@@ -124,5 +138,25 @@ mod tests {
         let out = layer_edges(&net, 1, &hidden, Mode::Contribution, &shut);
         assert_eq!(out.len(), 3 * 5);
         assert!(out.iter().all(|e| matches!(e.from, Node::Neuron { layer: 0, .. })));
+    }
+
+    #[test]
+    fn hidden_nodes_give_up_their_share() {
+        let n = |index| Node::Neuron { layer: 1, index };
+        let loud = Node::Group(0);
+        let edges = vec![
+            Edge { from: loud, to: n(0), value: 9.0 },
+            Edge { from: loud, to: n(1), value: -8.0 },
+            Edge { from: Node::Input(60), to: n(0), value: 0.5 },
+            Edge { from: Node::Input(61), to: n(1), value: -2.0 },
+        ];
+        // Half the edges: the loud node takes both slots.
+        assert_eq!(strongest(&edges, 0.5, &[]), vec![1, 0]);
+        // Hidden, its slots go to the rest.
+        assert_eq!(strongest(&edges, 0.5, &[loud]), vec![3]);
+        assert_eq!(strongest(&edges, 1.0, &[loud]), vec![2, 3]);
+        // Hiding a target drops its incoming edges too.
+        assert_eq!(strongest(&edges, 1.0, &[loud, n(1)]), vec![2]);
+        assert!(strongest(&edges, 1.0, &[loud, n(0), n(1)]).is_empty());
     }
 }

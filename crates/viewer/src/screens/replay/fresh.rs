@@ -55,7 +55,7 @@ fn drive(genome: &Path, def: TrackDef) -> Result<Replay, String> {
     let scoring = settings.scoring.unwrap_or_else(|| configs.scoring());
     let track = Track::build(def.clone()).map_err(|e| format!("{}: track doesn't build: {e}", def.name))?;
 
-    let mut driver = NnDriver::new(Network::new(saved.header.spec.clone(), saved.params.clone()));
+    let mut driver = NnDriver::new(Network::new(saved.header.spec.clone(), saved.params.clone()), &settings.episode);
     let episode = Episode::new(Arc::new(track), car.clone(), scoring.clone(), settings.episode, 0);
     let (result, recording) = episode.run_recorded(&mut driver);
 
@@ -101,7 +101,7 @@ mod tests {
         assert_eq!(replay.header.generation, 12);
         assert!(replay.genome.is_some());
 
-        let mut driver = NnDriver::new(Network::new(spec, params));
+        let mut driver = NnDriver::new(Network::new(spec, params), &episode);
         let track = Arc::new(Track::build(def).unwrap());
         let plain = Episode::new(track, CarParams::default(), ScoringParams::default(), episode, 0).run(&mut driver);
         assert_eq!(replay.header.result, plain);

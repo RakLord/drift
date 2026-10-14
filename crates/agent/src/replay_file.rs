@@ -412,10 +412,11 @@ mod tests {
             end_on_spin: false,
             clutch_grace_secs: 0.4,
             smoothness: Default::default(),
+            steering: Default::default(),
         };
         let (car, scoring) = (CarParams::default(), ScoringParams::default());
+        let mut driver = NnDriver::new(Network::new(spec.clone(), params.clone()), &config);
         let episode = Episode::new(track, car.clone(), scoring.clone(), config, 11);
-        let mut driver = NnDriver::new(Network::new(spec.clone(), params.clone()));
         let (result, recording) = episode.run_recorded(&mut driver);
         let genome = SavedGenome { header: GenomeHeader::new(spec, 4, 1, 12.0, "test"), params };
         Replay { header: ReplayHeader::new("test", result, def, car, scoring), recording, genome: Some(genome), dropped: None }

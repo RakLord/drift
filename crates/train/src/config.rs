@@ -29,6 +29,9 @@ pub struct TrainingConfig {
     /// Genomes for the live multi-car viewer (defaults if missing).
     #[serde(default)]
     pub watch: WatchConfig,
+    /// What a human pick from the review grid does (defaults if missing).
+    #[serde(default)]
+    pub review: ReviewConfig,
     pub curriculum: Vec<Stage>,
 }
 
@@ -115,6 +118,22 @@ pub struct WatchConfig {
 impl Default for WatchConfig {
     fn default() -> Self {
         Self { per_island: 5, drifters: 10 }
+    }
+}
+
+/// A genome picked in the viewer's review grid (`agent::picks`) is kept
+/// unchanged for `protect_gens` generations, and `flood_fraction` of its
+/// island is replaced by mutated children of it straight away.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewConfig {
+    pub protect_gens: u32,
+    pub flood_fraction: f64,
+}
+
+impl Default for ReviewConfig {
+    fn default() -> Self {
+        Self { protect_gens: 50, flood_fraction: 0.3 }
     }
 }
 

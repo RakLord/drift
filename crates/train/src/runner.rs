@@ -73,7 +73,7 @@ pub fn episode_seeds(run_seed: u64, generation: u32, tracks: usize) -> Vec<u64> 
 
 /// Drive one network round every track.
 pub fn run_genome(spec: &NetworkSpec, params: &[f32], tracks: &[Arc<Track>], seeds: &[u64], env: &Env) -> Vec<EpisodeResult> {
-    let mut driver = NnDriver::new(Network::new(spec.clone(), params.to_vec()));
+    let mut driver = NnDriver::new(Network::new(spec.clone(), params.to_vec()), &env.episode);
     tracks
         .iter()
         .zip(seeds)
@@ -97,7 +97,7 @@ pub fn record_genome(
         .par_iter()
         .zip(seeds)
         .map(|(track, &seed)| {
-            let mut driver = NnDriver::new(Network::new(spec.clone(), params.to_vec()));
+            let mut driver = NnDriver::new(Network::new(spec.clone(), params.to_vec()), &env.episode);
             let episode = Episode::new(track.clone(), env.car.clone(), env.scoring.clone(), env.episode.clone(), seed);
             episode.run_recorded(&mut driver)
         })

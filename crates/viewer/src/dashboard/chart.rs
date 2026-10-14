@@ -1,9 +1,13 @@
-//! Small multiples for run metrics: one y-axis per chart, thin lines, a
-//! recessive grid, a legend for two or more series, stage changes marked,
-//! and a shared hover crosshair.
+//! Small multiples for run metrics: one y-axis per chart, a recessive grid,
+//! a legend carrying each series' value at the active generation, bold
+//! trend lines over faint raw values, stage changes marked, and shared
+//! hover and pinned crosshairs.
+
+use std::ops::Range;
 
 use macroquad::prelude::*;
 
+use super::trend::rolling_mean;
 use crate::render::{text, theme};
 
 /// Categorical series colours in fixed order (validated for the dark panel:
@@ -21,47 +25,131 @@ const fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0)
 }
 
-pub struct Series<'a> {
-    pub name: &'a str,
-    pub values: &'a [f64],
+/// Series `k`'s colour (repeating past six).
+pub fn colour(k: usize) -> Color {
+    SERIES[k % SERIES.len()]
+}
+
+pub struct Series {
+    pub name: String,
+    pub values: Vec<f64>,
     /// Draw as dots (sparse values, e.g. test results) instead of a line.
     pub dots: bool,
+}
+
+impl Series {
+    pub fn line(name: impl Into<String>, values: Vec<f64>) -> Self {
+        Self { name: name.into(), values, dots: false }
+    }
+
+    pub fn dots(name: impl Into<String>, values: Vec<f64>) -> Self {
+        Self { name: name.into(), values, dots: true }
+    }
+
+    /// Logged at all in this run (series that never were are left out).
+    fn logged(&self) -> bool {
+        self.values.iter().any(|v| v.is_finite())
+    }
+
+    /// The value at `row`, or the last one logged before it.
+    fn at_or_before(&self, row: usize) -> Option<f64> {
+        let end = (row + 1).min(self.values.len());
+        self.values[..end].iter().rev().copied().find(|v| v.is_finite())
+    }
 }
 
 pub enum Kind {
     Lines,
     /// Shares stacked to 100%.
     Stacked,
+    /// The first two series are the low and high edges of a shaded band
+    /// (e.g. worst..best); all are also drawn as lines.
+    Band,
 }
 
-pub struct Chart<'a> {
-    pub title: &'a str,
-    pub unit: &'a str,
-    pub series: Vec<Series<'a>>,
+/// How lines are drawn when there are enough generations for a trend.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LineStyle {
+    /// Bold trend over faint raw values.
+    Both,
+    Trend,
+    Raw,
+}
+
+impl LineStyle {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Both => Self::Trend,
+            Self::Trend => Self::Raw,
+            Self::Raw => Self::Both,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Both => "trend + raw",
+            Self::Trend => "trend only",
+            Self::Raw => "raw only",
+        }
+    }
+}
+
+pub struct Chart {
+    pub title: &'static str,
+    pub unit: &'static str,
+    pub series: Vec<Series>,
     pub kind: Kind,
     /// Fixed y-range, or None to fit the data.
     pub range: Option<(f64, f64)>,
 }
 
+/// What every chart on a page shares this frame.
+pub struct View<'a> {
+    /// Rows on screen (the zoom window).
+    pub rows: Range<usize>,
+    /// Rows per trend window; None draws raw values only.
+    pub trend: Option<usize>,
+    pub style: LineStyle,
+    pub stages: &'a [(usize, String)],
+    pub generations: &'a [f64],
+    pub hover: Option<usize>,
+    pub pinned: Option<usize>,
+}
+
+impl View<'_> {
+    fn shows_raw(&self) -> bool {
+        self.trend.is_none() || self.style != LineStyle::Trend
+    }
+
+    fn shows_trend(&self) -> bool {
+        self.trend.is_some() && self.style != LineStyle::Raw
+    }
+
+    /// The row the legends read: pinned, else hovered, else the latest.
+    fn active(&self) -> usize {
+        self.pinned.or(self.hover).unwrap_or(self.rows.end.saturating_sub(1))
+    }
+}
+
 pub struct Frame {
-    pub rect: Rect,
+    rect: Rect,
     plot: Rect,
     lo: f64,
     hi: f64,
-    count: usize,
+    rows: Range<usize>,
 }
 
 const PAD_LEFT: f32 = 52.0;
 /// Below the title; legend rows add to this.
 const PAD_TOP: f32 = 40.0;
-const LEGEND_ROW: f32 = 18.0;
-const PAD_BOTTOM: f32 = 22.0;
+const LEGEND_ROW: f32 = 22.0;
+const PAD_BOTTOM: f32 = 24.0;
 const PAD_RIGHT: f32 = 14.0;
 
 impl Frame {
-    fn x(&self, i: usize) -> f32 {
-        let span = (self.count.max(2) - 1) as f32;
-        self.plot.x + self.plot.w * i as f32 / span
+    fn x(&self, row: usize) -> f32 {
+        let span = (self.rows.len().max(2) - 1) as f32;
+        self.plot.x + self.plot.w * row.saturating_sub(self.rows.start) as f32 / span
     }
 
     fn y(&self, v: f64) -> f32 {
@@ -73,11 +161,24 @@ impl Frame {
     pub fn hovered(&self) -> Option<usize> {
         let (mx, my) = mouse_position();
         let inside = mx >= self.plot.x && mx <= self.plot.right() && my >= self.rect.y && my <= self.rect.bottom();
-        if !inside || self.count == 0 {
+        if !inside || self.rows.is_empty() {
             return None;
         }
         let t = (mx - self.plot.x) / self.plot.w;
-        Some(((t * (self.count.max(2) - 1) as f32).round() as usize).min(self.count - 1))
+        let offset = (t * (self.rows.len().max(2) - 1) as f32).round() as usize;
+        Some(self.rows.start + offset.min(self.rows.len() - 1))
+    }
+
+    /// Rows on screen, thinned to about one per pixel column.
+    fn sampled(&self) -> Vec<usize> {
+        let step = (self.rows.len() as f32 / self.plot.w.max(1.0)).ceil().max(1.0) as usize;
+        let mut rows: Vec<usize> = self.rows.clone().step_by(step).collect();
+        if let Some(last) = self.rows.clone().last()
+            && rows.last() != Some(&last)
+        {
+            rows.push(last);
+        }
+        rows
     }
 }
 
@@ -92,52 +193,107 @@ fn format_tick(v: f64, step: f64) -> String {
     if step >= 1.0 { format!("{v:.0}") } else if step >= 0.1 { format!("{v:.1}") } else { format!("{v:.2}") }
 }
 
-impl Chart<'_> {
-    fn fit(&self) -> (f64, f64) {
+impl Chart {
+    /// Each series' trend (None for dots, or when the view has no trend).
+    fn trends(&self, view: &View) -> Vec<Option<Vec<f64>>> {
+        self.series
+            .iter()
+            .map(|s| match view.trend {
+                Some(w) if !s.dots => Some(rolling_mean(&s.values, w)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The values a series is drawn from: its trend when shown, else raw.
+    fn drawn<'a>(&'a self, k: usize, view: &View, trends: &'a [Option<Vec<f64>>]) -> &'a [f64] {
+        match &trends[k] {
+            Some(t) if view.shows_trend() => t,
+            _ => &self.series[k].values,
+        }
+    }
+
+    fn fit(&self, view: &View, trends: &[Option<Vec<f64>>]) -> (f64, f64) {
         if let Some(r) = self.range {
             return r;
         }
-        let finite = self.series.iter().flat_map(|s| s.values.iter().copied()).filter(|v| v.is_finite());
-        let (lo, hi) = finite.fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
+        let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+        for (s, t) in self.series.iter().zip(trends) {
+            let raw = (view.shows_raw() || t.is_none()).then_some(&s.values[..]);
+            let trend = t.as_deref().filter(|_| view.shows_trend());
+            for values in [raw, trend].into_iter().flatten() {
+                for &v in values.get(view.rows.clone()).unwrap_or(&[]).iter().filter(|v| v.is_finite()) {
+                    (lo, hi) = (lo.min(v), hi.max(v));
+                }
+            }
+        }
         if lo > hi {
             return (0.0, 1.0);
         }
-        let lo = lo.min(0.0);
+        // The whole run starts at 0; a zoomed window fits its data tight.
+        let lo = if view.rows.start == 0 { lo.min(0.0) } else { lo };
         let hi = if hi - lo < 1e-9 { lo + 1.0 } else { hi };
         let step = tick_step(hi - lo);
         ((lo / step).floor() * step, (hi / step).ceil() * step)
     }
 
-    pub fn draw(&self, rect: Rect, stages: &[(usize, String)], hover: Option<usize>, generations: &[f64]) -> Frame {
+    /// A value as the legend and tooltip show it.
+    fn format(&self, v: f64) -> String {
+        match self.kind {
+            Kind::Stacked => format!("{:.0}%", v * 100.0),
+            _ if self.unit == "%" => format!("{v:.0}%"),
+            _ if v.abs() >= 100.0 => format!("{v:.0}{}", self.unit),
+            _ => format!("{v:.2}{}", self.unit),
+        }
+    }
+
+    pub fn draw(&self, rect: Rect, view: &View) -> Frame {
         draw_rectangle(rect.x, rect.y, rect.w, rect.h, theme::PANEL_SOLID);
         draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1.0, theme::GRID_MAJOR);
         text(self.title, rect.x + 12.0, rect.y + 22.0, 20.0, theme::TEXT);
 
-        let count = self.series.first().map_or(0, |s| s.values.len());
-        let (lo, hi) = self.fit();
+        let shown: Vec<usize> = (0..self.series.len()).filter(|&k| self.series[k].logged()).collect();
+        if shown.is_empty() {
+            let message = "not logged in this run";
+            let w = measure_text(message, None, 16, 1.0).width;
+            text(message, rect.x + (rect.w - w) / 2.0, rect.y + rect.h / 2.0, 16.0, theme::TEXT_DIM);
+            return Frame { rect, plot: Rect::new(0.0, 0.0, 0.0, 0.0), lo: 0.0, hi: 1.0, rows: 0..0 };
+        }
+        let trends = self.trends(view);
+        let (lo, hi) = self.fit(view, &trends);
 
-        // Legend (two or more series) on its own rows under the title,
-        // wrapping as needed: coloured swatch, text in text colour.
+        // Each series' value at the active row. One series: right of the
+        // title. Two or more: a legend on its own rows under the title,
+        // wrapping as needed (coloured swatch, then name and value).
+        let active = view.active();
+        let value = |k: usize| self.series[k].at_or_before(active).map(|v| self.format(v));
         let mut legend_rows = 0.0;
-        if self.series.len() >= 2 {
+        if let [k] = shown[..] {
+            if let Some(v) = value(k) {
+                let w = measure_text(&v, None, 18, 1.0).width;
+                text(&v, rect.right() - 12.0 - w, rect.y + 22.0, 18.0, theme::TEXT_DIM);
+            }
+        } else {
             legend_rows = 1.0;
             let (left, right) = (rect.x + 12.0, rect.right() - 12.0);
             let mut x = left;
-            for (k, s) in self.series.iter().enumerate() {
-                let w = 14.0 + measure_text(s.name, None, 14, 1.0).width;
+            for &k in &shown {
+                let name = &self.series[k].name;
+                let label = value(k).map_or_else(|| name.clone(), |v| format!("{name}  {v}"));
+                let w = 16.0 + measure_text(&label, None, 17, 1.0).width;
                 if x + w > right && x > left {
                     x = left;
                     legend_rows += 1.0;
                 }
-                let y = rect.y + 24.0 + legend_rows * LEGEND_ROW;
-                draw_rectangle(x, y - 10.0, 10.0, 10.0, SERIES[k]);
-                text(s.name, x + 14.0, y, 14.0, theme::TEXT_DIM);
+                let y = rect.y + 22.0 + legend_rows * LEGEND_ROW;
+                draw_rectangle(x, y - 12.0, 12.0, 12.0, colour(k));
+                text(&label, x + 16.0, y, 17.0, theme::TEXT_DIM);
                 x += w + 14.0;
             }
         }
         let top = PAD_TOP + legend_rows * LEGEND_ROW;
         let plot = Rect::new(rect.x + PAD_LEFT, rect.y + top, rect.w - PAD_LEFT - PAD_RIGHT, rect.h - top - PAD_BOTTOM);
-        let frame = Frame { rect, plot, lo, hi, count };
+        let frame = Frame { rect, plot, lo, hi, rows: view.rows.clone() };
 
         // Recessive grid and y ticks.
         let step = tick_step(hi - lo);
@@ -150,17 +306,10 @@ impl Chart<'_> {
             text(&label, plot.x - w - 6.0, y + 4.0, 13.0, theme::TEXT_DIM);
             v += step;
         }
-        // x: first and last generation.
-        if count > 0 {
-            let first = format!("gen {:.0}", generations.first().copied().unwrap_or(0.0));
-            let last = format!("{:.0}", generations.last().copied().unwrap_or(0.0));
-            text(&first, plot.x, rect.bottom() - 6.0, 13.0, theme::TEXT_DIM);
-            let w = measure_text(&last, None, 13, 1.0).width;
-            text(&last, plot.right() - w, rect.bottom() - 6.0, 13.0, theme::TEXT_DIM);
-        }
+        self.draw_x_ticks(&frame, view);
 
         // Stage changes.
-        for (row, name) in stages.iter().filter(|(row, _)| *row > 0) {
+        for (row, name) in view.stages.iter().filter(|(row, _)| *row > view.rows.start && *row < view.rows.end) {
             let x = frame.x(*row);
             let mut y = plot.y;
             while y < plot.bottom() {
@@ -171,80 +320,189 @@ impl Chart<'_> {
         }
 
         match self.kind {
-            Kind::Lines => self.draw_lines(&frame),
-            Kind::Stacked => self.draw_stacked(&frame),
+            Kind::Lines => self.draw_lines(&frame, view, &trends, &shown),
+            Kind::Stacked => self.draw_stacked(&frame, view, &trends),
+            Kind::Band => {
+                self.draw_band(&frame, view, &trends);
+                self.draw_lines(&frame, view, &trends, &shown);
+            }
         }
 
-        if let Some(row) = hover.filter(|&r| r < count) {
+        if let Some(row) = view.pinned.filter(|r| view.rows.contains(r)) {
+            let x = frame.x(row);
+            draw_line(x, plot.y, x, plot.bottom(), 2.0, Color { a: 0.7, ..theme::NEON_CYAN });
+        }
+        if let Some(row) = view.hover.filter(|r| view.rows.contains(r)) {
             let x = frame.x(row);
             draw_line(x, plot.y, x, plot.bottom(), 1.0, theme::TEXT_DIM);
-            if let Kind::Lines = self.kind {
-                for (k, s) in self.series.iter().enumerate() {
-                    if let Some(&v) = s.values.get(row).filter(|v| v.is_finite()) {
-                        draw_circle(x, frame.y(v), 5.0, theme::PANEL_SOLID);
-                        draw_circle(x, frame.y(v), 4.0, SERIES[k]);
-                    }
+        }
+        // Dots where the bold lines cross the hovered (or pinned) row.
+        if let Some(row) = view.hover.or(view.pinned).filter(|r| view.rows.contains(r))
+            && !matches!(self.kind, Kind::Stacked)
+        {
+            for &k in &shown {
+                if let Some(&v) = self.drawn(k, view, &trends).get(row).filter(|v| v.is_finite()) {
+                    draw_circle(frame.x(row), frame.y(v), 5.0, theme::PANEL_SOLID);
+                    draw_circle(frame.x(row), frame.y(v), 4.0, colour(k));
                 }
             }
         }
         frame
     }
 
-    fn draw_lines(&self, f: &Frame) {
-        for (k, s) in self.series.iter().enumerate() {
-            let color = SERIES[k];
+    /// Generation labels along the bottom at "nice" steps, and "gen".
+    fn draw_x_ticks(&self, f: &Frame, view: &View) {
+        let y = f.rect.bottom() - 7.0;
+        text("gen", f.rect.x + 12.0, y, 13.0, theme::TEXT_DIM);
+        let generations = view.generations.get(view.rows.clone()).unwrap_or(&[]);
+        let (Some(&first), Some(&last)) = (generations.first(), generations.last()) else { return };
+        if !first.is_finite() || !last.is_finite() {
+            return;
+        }
+        let step = tick_step(last - first).max(1.0);
+        for (i, &g) in generations.iter().enumerate() {
+            if !g.is_finite() || g.rem_euclid(step) > 1e-6 {
+                continue;
+            }
+            let x = f.x(view.rows.start + i);
+            draw_line(x, f.plot.bottom(), x, f.plot.bottom() + 4.0, 1.0, theme::GRID_MAJOR);
+            let label = format!("{g:.0}");
+            let w = measure_text(&label, None, 13, 1.0).width;
+            text(&label, (x - w / 2.0).clamp(f.plot.x, f.plot.right() - w), y, 13.0, theme::TEXT_DIM);
+        }
+    }
+
+    fn draw_lines(&self, f: &Frame, view: &View, trends: &[Option<Vec<f64>>], shown: &[usize]) {
+        for &k in shown {
+            let (s, color) = (&self.series[k], colour(k));
             if s.dots {
-                for (i, &v) in s.values.iter().enumerate().filter(|(_, v)| v.is_finite()) {
-                    draw_circle(f.x(i), f.y(v), 4.0, color);
+                for row in f.rows.clone() {
+                    if let Some(&v) = s.values.get(row).filter(|v| v.is_finite()) {
+                        draw_circle(f.x(row), f.y(v), 4.0, color);
+                    }
                 }
                 continue;
             }
-            let points: Vec<(usize, f64)> = s.values.iter().copied().enumerate().filter(|(_, v)| v.is_finite()).collect();
-            for pair in points.windows(2) {
-                let ((i0, v0), (i1, v1)) = (pair[0], pair[1]);
-                draw_line(f.x(i0), f.y(v0), f.x(i1), f.y(v1), 2.0, color);
+            let trend = trends[k].as_deref().filter(|_| view.shows_trend());
+            if view.shows_raw() || trend.is_none() {
+                match trend {
+                    Some(_) => polyline(f, &s.values, 1.0, Color { a: 0.35, ..color }),
+                    None => polyline(f, &s.values, 2.0, color),
+                }
+            }
+            if let Some(t) = trend {
+                polyline(f, t, 2.0, color);
             }
         }
     }
 
-    fn draw_stacked(&self, f: &Frame) {
-        let count = f.count;
-        let mut base = vec![0.0; count];
-        for (k, s) in self.series.iter().enumerate() {
-            let top: Vec<f64> = (0..count).map(|i| base[i] + s.values[i].max(0.0) * 100.0).collect();
-            for i in 1..count {
-                let (x0, x1) = (f.x(i - 1), f.x(i));
-                let (b0, b1, t0, t1) = (f.y(base[i - 1]), f.y(base[i]), f.y(top[i - 1]), f.y(top[i]));
-                draw_triangle(vec2(x0, b0), vec2(x1, b1), vec2(x1, t1), SERIES[k]);
-                draw_triangle(vec2(x0, b0), vec2(x1, t1), vec2(x0, t0), SERIES[k]);
+    fn draw_stacked(&self, f: &Frame, view: &View, trends: &[Option<Vec<f64>>]) {
+        let rows = f.sampled();
+        let mut base = vec![0.0; rows.len()];
+        for k in 0..self.series.len() {
+            let values = self.drawn(k, view, trends);
+            // NaN.max(0.0) is 0: unlogged shares stack as nothing.
+            let top: Vec<f64> = rows.iter().zip(&base).map(|(&r, b)| b + values[r].max(0.0) * 100.0).collect();
+            for j in 1..rows.len() {
+                let (x0, x1) = (f.x(rows[j - 1]), f.x(rows[j]));
+                let (b0, b1, t0, t1) = (f.y(base[j - 1]), f.y(base[j]), f.y(top[j - 1]), f.y(top[j]));
+                draw_triangle(vec2(x0, b0), vec2(x1, b1), vec2(x1, t1), colour(k));
+                draw_triangle(vec2(x0, b0), vec2(x1, t1), vec2(x0, t0), colour(k));
             }
             // Surface gap between bands.
-            for i in 1..count {
-                draw_line(f.x(i - 1), f.y(top[i - 1]), f.x(i), f.y(top[i]), 2.0, theme::PANEL_SOLID);
+            for j in 1..rows.len() {
+                draw_line(f.x(rows[j - 1]), f.y(top[j - 1]), f.x(rows[j]), f.y(top[j]), 2.0, theme::PANEL_SOLID);
             }
             base = top;
         }
     }
 
-    /// Tooltip lines for one generation.
-    pub fn values_at(&self, row: usize) -> Vec<(usize, String)> {
+    fn draw_band(&self, f: &Frame, view: &View, trends: &[Option<Vec<f64>>]) {
+        if self.series.len() < 2 {
+            return;
+        }
+        let (low, high) = (self.drawn(0, view, trends), self.drawn(1, view, trends));
+        let fill = Color { a: 0.18, ..colour(0) };
+        for pair in f.sampled().windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if ![low[a], low[b], high[a], high[b]].iter().all(|v| v.is_finite()) {
+                continue;
+            }
+            let (x0, x1) = (f.x(a), f.x(b));
+            let (l0, l1, h0, h1) = (f.y(low[a]), f.y(low[b]), f.y(high[a]), f.y(high[b]));
+            draw_triangle(vec2(x0, l0), vec2(x1, l1), vec2(x1, h1), fill);
+            draw_triangle(vec2(x0, l0), vec2(x1, h1), vec2(x0, h0), fill);
+        }
+    }
+
+    /// Tooltip lines for one generation: each series' value there, and its
+    /// trend with the change over the last trend window.
+    pub fn values_at(&self, row: usize, view: &View) -> Vec<(usize, String)> {
+        let trends = self.trends(view);
+        let finite = |v: &&f64| v.is_finite();
         self.series
             .iter()
             .enumerate()
             .filter_map(|(k, s)| {
-                let v = *s.values.get(row)?;
-                if !v.is_finite() {
-                    return None;
+                let v = *s.values.get(row).filter(finite)?;
+                let mut line = format!("{}  {}", s.name, self.format(v));
+                if let (Some(t), Some(w)) = (&trends[k], view.trend)
+                    && let Some(&now) = t.get(row).filter(finite)
+                {
+                    line += &format!("    trend {}", self.format(now));
+                    if let Some(&then) = row.checked_sub(w).and_then(|r| t.get(r)).filter(finite) {
+                        let sign = if now >= then { "+" } else { "-" };
+                        line += &format!(" ({sign}{})", self.format((now - then).abs()));
+                    }
                 }
-                let shown = match self.kind {
-                    Kind::Stacked => format!("{:.0}%", v * 100.0),
-                    Kind::Lines if self.unit == "%" => format!("{v:.0}%"),
-                    Kind::Lines if v.abs() >= 100.0 => format!("{v:.0}"),
-                    Kind::Lines => format!("{v:.2}"),
-                };
-                Some((k, format!("{}  {shown}", s.name)))
+                Some((k, line))
             })
             .collect()
+    }
+}
+
+/// A `width` px line through the finite values on screen. With more
+/// rows than pixels, each pixel column draws its min..max, so spikes stay.
+fn polyline(f: &Frame, values: &[f64], width: f32, color: Color) {
+    struct Column {
+        px: i32,
+        x: f32,
+        first: f32,
+        last: f32,
+        top: f32,
+        bottom: f32,
+    }
+    let mut previous: Option<Vec2> = None;
+    let mut flush = |c: Column| {
+        if let Some(p) = previous {
+            draw_line(p.x, p.y, c.x, c.first, width, color);
+        }
+        if c.bottom - c.top > 0.5 {
+            draw_line(c.x, c.top, c.x, c.bottom, width, color);
+        }
+        previous = Some(vec2(c.x, c.last));
+    };
+    let mut column: Option<Column> = None;
+    for row in f.rows.clone() {
+        let Some(&v) = values.get(row).filter(|v| v.is_finite()) else { continue };
+        let (x, y) = (f.x(row), f.y(v));
+        let px = x.floor() as i32;
+        match &mut column {
+            Some(c) if c.px == px => {
+                c.last = y;
+                c.top = c.top.min(y);
+                c.bottom = c.bottom.max(y);
+            }
+            _ => {
+                if let Some(c) = column.take() {
+                    flush(c);
+                }
+                column = Some(Column { px, x, first: y, last: y, top: y, bottom: y });
+            }
+        }
+    }
+    if let Some(c) = column {
+        flush(c);
     }
 }
 
@@ -265,7 +523,7 @@ pub fn tooltip(heading: &str, lines: &[(usize, String)]) {
     text(heading, x + 10.0, y + 18.0, 14.0, theme::TEXT);
     for (i, (k, line)) in lines.iter().enumerate() {
         let ly = y + 36.0 + i as f32 * 18.0;
-        draw_rectangle(x + 10.0, ly - 10.0, 10.0, 10.0, SERIES[*k]);
+        draw_rectangle(x + 10.0, ly - 10.0, 10.0, 10.0, colour(*k));
         text(line, x + 26.0, ly, 14.0, theme::TEXT_DIM);
     }
 }

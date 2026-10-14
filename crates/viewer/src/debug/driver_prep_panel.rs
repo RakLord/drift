@@ -6,10 +6,6 @@ use sim::World;
 
 use crate::render::{text, theme};
 
-pub fn draw(world: &World, view_w: f32) {
-    draw_at(world, view_w, screen_height());
-}
-
 /// Laid out from `bottom` instead of the bottom of the screen.
 pub fn draw_at(world: &World, view_w: f32, bottom: f32) {
     let notes = driver_prep::upcoming(&world.track, world.place.distance);

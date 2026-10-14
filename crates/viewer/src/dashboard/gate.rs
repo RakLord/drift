@@ -95,7 +95,7 @@ impl Gate {
     }
 }
 
-fn number(v: f64) -> String {
+pub(super) fn number(v: f64) -> String {
     if !v.is_finite() {
         "-".to_owned()
     } else if v.abs() >= 100.0 {

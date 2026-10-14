@@ -13,7 +13,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use sim::car::CarParams;
 use sim::episode::EpisodeConfig;
-use sim::scoring::ScoringParams;
+use sim::scoring::{Breakdown, ScoringParams};
 
 use crate::genome_file::{self, GenomeFileError, SavedGenome};
 
@@ -31,6 +31,34 @@ pub struct TopEntry {
     pub drift_quality: f64,
     /// Picked for drift quality rather than fitness.
     pub drifter: bool,
+    /// Lineage: the generation it was created in, its parents' ids (none
+    /// for a random immigrant) and its own mutation step size. Files from
+    /// before these were written read as 0 / empty.
+    #[serde(default)]
+    pub born: u32,
+    #[serde(default)]
+    pub parents: Vec<u64>,
+    #[serde(default)]
+    pub sigma: f64,
+    /// Its Pareto objectives this generation: driving, flow, judged
+    /// (`evo::fitness`). Empty when not written.
+    #[serde(default)]
+    pub objectives: Vec<f64>,
+    /// What its training runs this generation came to.
+    #[serde(default)]
+    pub training: Option<TrainingSummary>,
+}
+
+/// One genome's training runs in a generation, summed up.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TrainingSummary {
+    pub runs: u32,
+    /// Means over the runs.
+    pub laps: f64,
+    pub progress: f64,
+    /// How each run ended (`EndReason::name`), in run order.
+    pub ends: Vec<String>,
+    pub score: Breakdown,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -141,7 +169,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<TopGenomes, TopFileError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use common::Rng;
     use nn::{Activation, LayerSpec};
 
@@ -149,7 +177,7 @@ mod tests {
     use crate::driver_spec;
     use crate::genome_file::GenomeHeader;
 
-    fn top() -> TopGenomes {
+    pub(crate) fn top() -> TopGenomes {
         let spec = driver_spec(vec![LayerSpec { size: 6, activation: Activation::Tanh }]);
         let genomes: Vec<SavedGenome> = (0..3)
             .map(|i| SavedGenome {
@@ -158,7 +186,25 @@ mod tests {
             })
             .collect();
         let entries = (0..3)
-            .map(|i| TopEntry { id: 100 + u64::from(i), island: i, rank: i + 1, fitness: 1.0, drift_quality: 0.2, drifter: i == 2 })
+            .map(|i| TopEntry {
+                id: 100 + u64::from(i),
+                island: i,
+                rank: i + 1,
+                fitness: 1.0,
+                drift_quality: 0.2,
+                drifter: i == 2,
+                born: 4,
+                parents: vec![7, 8],
+                sigma: 0.05,
+                objectives: vec![1.0, 0.2, 3.0],
+                training: (i == 0).then(|| TrainingSummary {
+                    runs: 2,
+                    laps: 0.5,
+                    progress: 400.0,
+                    ends: vec!["time up".into(), "crashed".into()],
+                    score: Breakdown { line: 1.0, angle: 2.0, style: 3.0, penalty: 4.0 },
+                }),
+            })
             .collect();
         let episode = EpisodeConfig {
             max_secs: 60.0,
@@ -171,6 +217,7 @@ mod tests {
             end_on_spin: false,
             clutch_grace_secs: 0.4,
             smoothness: Default::default(),
+            steering: Default::default(),
         };
         let header = TopHeader {
             run: "r".into(),
@@ -197,5 +244,13 @@ mod tests {
         assert_eq!(back.genomes, t.genomes);
         assert!(!back.header.episode.end_on_spin, "carries the stage's rules");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reads_entries_written_before_lineage_and_training() {
+        let old = "id = 5\nisland = 1\nrank = 2\nfitness = 3.0\ndrift_quality = 0.1\ndrifter = false\n";
+        let entry: TopEntry = toml::from_str(old).unwrap();
+        assert_eq!((entry.id, entry.born, entry.sigma), (5, 0, 0.0));
+        assert!(entry.parents.is_empty() && entry.objectives.is_empty() && entry.training.is_none());
     }
 }

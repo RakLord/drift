@@ -11,6 +11,18 @@ const SPACING: f64 = 25.0;
 
 pub fn draw(camera: &FollowCamera) {
     clear_background(theme::GROUND);
+    grid(camera);
+}
+
+/// The same, filling only what the camera shows (one tile of several:
+/// clearing would wipe the others).
+pub fn draw_in_view(camera: &FollowCamera) {
+    let (min, max) = camera.visible();
+    draw_rectangle(min.x as f32, min.y as f32, (max.x - min.x) as f32, (max.y - min.y) as f32, theme::GROUND);
+    grid(camera);
+}
+
+fn grid(camera: &FollowCamera) {
     let (min, max) = camera.visible();
     let mut x = (min.x / SPACING).floor() * SPACING;
     while x <= max.x {

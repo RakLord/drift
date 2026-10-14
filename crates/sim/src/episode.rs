@@ -49,10 +49,33 @@ pub struct EpisodeConfig {
     /// `EpisodeStats::throttle_saws`).
     #[serde(default)]
     pub smoothness: SmoothnessConfig,
+    /// What a network's steer output means (see `SteeringOutput`).
+    #[serde(default)]
+    pub steering: SteeringOutput,
+}
+
+impl EpisodeConfig {
+    /// Time between the controller's decisions, seconds.
+    pub fn decision_secs(&self) -> f64 {
+        f64::from(self.decision_every.max(1)) * TICK
+    }
 }
 
 fn default_clutch_grace_secs() -> f64 {
     0.4
+}
+
+/// What a network driver's steer output means. Runs from before this
+/// setting have none, and drive in `Position`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SteeringOutput {
+    /// Where the wheel should be, -1..1, fresh every decision.
+    #[default]
+    Position,
+    /// How fast to turn the wheel: full output takes it from one lock to
+    /// the other in `full_lock_secs`. Smooth by construction.
+    Rate { full_lock_secs: f64 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

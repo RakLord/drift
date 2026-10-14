@@ -475,6 +475,7 @@ mod tests {
             end_on_spin: true,
             clutch_grace_secs: 0.4,
             smoothness: Default::default(),
+            steering: Default::default(),
         };
         let (scoring, episode) = s.rules(&real, &episode);
         assert_eq!(scoring.drift.start_angle_deg, 5.0);

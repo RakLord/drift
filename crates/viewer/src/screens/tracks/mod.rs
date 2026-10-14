@@ -18,7 +18,7 @@ use sim::track::TrackStats;
 
 use super::Switch;
 use super::library::{self, Entry};
-use crate::dashboard::chart::{Chart, Kind, Series};
+use crate::dashboard::chart::{Chart, Kind, LineStyle, Series, View};
 use crate::render::thumb::{Thumb, ThumbStyle};
 use crate::render::{text, theme};
 use crate::ui::{self, ButtonStyle, Panel};
@@ -839,11 +839,20 @@ impl TracksScreen {
                     let chart = Chart {
                         title: "Laps per generation",
                         unit: "",
-                        series: vec![Series { name: "laps", values: &s.laps_by_gen, dots: true }],
+                        series: vec![Series::dots("laps", s.laps_by_gen.clone())],
                         kind: Kind::Lines,
                         range: None,
                     };
-                    chart.draw(area, &[], None, &generations);
+                    let view = View {
+                        rows: 0..generations.len(),
+                        trend: None,
+                        style: LineStyle::Raw,
+                        stages: &[],
+                        generations: &generations,
+                        hover: None,
+                        pinned: None,
+                    };
+                    chart.draw(area, &view);
                 }
             }
             None => ui.label("not driven in this window", theme::TEXT_DIM),

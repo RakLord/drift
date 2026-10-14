@@ -16,6 +16,7 @@ mod checkpoint;
 mod tracks_log;
 mod config;
 mod metrics;
+mod picks;
 mod runner;
 
 use std::path::{Path, PathBuf};
@@ -24,7 +25,7 @@ use std::time::Instant;
 
 use agent::genome_file::{self, GenomeHeader, SavedGenome};
 use agent::replay_file::{self, Replay, ReplayHeader};
-use agent::top_file::{self, TopEntry, TopGenomes, TopHeader};
+use agent::top_file::{self, TopEntry, TopGenomes, TopHeader, TrainingSummary};
 use common::Rng;
 use common::paths::workspace_path;
 use evo::{Curriculum, Ids, Island, Stage, migrate};
@@ -36,7 +37,7 @@ use sim::scoring::ScoringParams;
 use sim::track::generator::GeneratorParams;
 use sim::track::{Track, TrackDef};
 
-use checkpoint::Population;
+use checkpoint::{Population, Protected};
 use config::{TrainingConfig, WatchConfig};
 use metrics::{MetricsCsv, Report, Saved};
 use runner::{Env, evaluate, evaluate_some, run_genome};
@@ -201,7 +202,29 @@ fn save_top(
         let island = &islands[i];
         let fitness = island.fitness[g];
         let rank = ranked.iter().position(|&k| k == (i, g)).unwrap_or(0) as u32 + 1;
-        entries.push(TopEntry { id: island.genomes[g].id, island: i as u32, rank, fitness, drift_quality: quality(&(i, g)), drifter });
+        let genome = &island.genomes[g];
+        let runs = &results[i][g];
+        let count = runs.len().max(1) as f64;
+        let training = TrainingSummary {
+            runs: runs.len() as u32,
+            laps: runs.iter().map(EpisodeResult::laps).sum::<f64>() / count,
+            progress: runs.iter().map(|r| r.progress).sum::<f64>() / count,
+            ends: runs.iter().map(|r| r.end.name().to_owned()).collect(),
+            score: metrics::mean_score(&runs.iter().collect::<Vec<_>>()),
+        };
+        entries.push(TopEntry {
+            id: genome.id,
+            island: i as u32,
+            rank,
+            fitness,
+            drift_quality: quality(&(i, g)),
+            drifter,
+            born: genome.born,
+            parents: genome.parents.iter().flatten().copied().collect(),
+            sigma: genome.sigma,
+            objectives: island.objectives.get(g).map_or_else(Vec::new, |o| o.to_vec()),
+            training: Some(training),
+        });
         let header = GenomeHeader::new(island.spec.clone(), generation, i as u32, fitness, format!("{run} gen {generation} #{rank}"));
         genomes.push(SavedGenome { header, params: island.genomes[g].params.clone() });
     }
@@ -362,7 +385,7 @@ fn run(args: Args) -> Result<(), String> {
                     Island::new(i, spec, &cfg.ga, &mut rng, &mut ids)
                 })
                 .collect();
-            Population { generation: 0, stage: 0, ids, islands }
+            Population { generation: 0, stage: 0, ids, islands, protected: vec![] }
         }
     };
     let mut curriculum = Curriculum::new(cfg.curriculum.clone(), args.stage.unwrap_or(pop.stage));
@@ -480,22 +503,56 @@ fn run(args: Args) -> Result<(), String> {
                 println!("== polishing: {} generated tracks/gen", next.tracks_per_generation(cfg.tracks.per_generation));
             }
         }
+        // Human picks are kept until their protection runs out.
+        pop.protected.retain(|p| p.until > generation + 1);
+        let protected_ids: Vec<u64> = pop.protected.iter().map(|p| p.id).collect();
         let migration_due = ga.migration_every > 0 && generation > 0 && generation % ga.migration_every == 0;
-        if migration_due && let Some((from, to)) = migrate(&mut pop.islands, &ga, &mut pop.ids) {
+        if migration_due && let Some((from, to)) = migrate(&mut pop.islands, &ga, &mut pop.ids, &protected_ids) {
             println!("== island {to} replaced by a copy of island {from} ({})", pop.islands[to].spec.describe());
         }
+        let new_picks = picks::take(&run_dir, &pop.islands, generation);
+        for pick in &new_picks {
+            // Picked again: protection starts over.
+            pop.protected.retain(|p| p.id != pick.genome.id);
+            pop.protected.push(Protected { id: pick.genome.id, island: pick.island, until: generation + 1 + cfg.review.protect_gens });
+        }
+        let mut keep: Vec<Vec<evo::Genome>> = vec![vec![]; pop.islands.len()];
+        pop.protected.retain(|p| {
+            let alive = pop.islands.get(p.island).and_then(|i| i.genomes.iter().find(|g| g.id == p.id));
+            match alive.or_else(|| new_picks.iter().find(|n| n.genome.id == p.id).map(|n| &n.genome)) {
+                Some(g) => {
+                    keep[p.island].push(g.clone());
+                    true
+                }
+                None => {
+                    println!("== pick #{} is no longer in island {}, protection dropped", p.id, p.island);
+                    false
+                }
+            }
+        });
 
         // The next stage's settings, if it just changed.
         let next_ga = curriculum.stage().ga(&cfg.ga);
-        for island in &mut pop.islands {
+        for (i, island) in pop.islands.iter_mut().enumerate() {
             let mut rng = Rng::with_stream(runner::mix(cfg.seed, u64::from(generation)), island.index as u64);
             let best = island.best().map(|(g, _)| island.genomes[g].params.clone());
-            island.breed(&ga, &mut rng, &mut pop.ids, generation + 1);
+            island.breed(&ga, &mut rng, &mut pop.ids, generation + 1, &keep[i]);
             // New stage: fresh step sizes and a burst of variety around the
             // island's best, so it can explore the new reward (a polish
             // stage only resets the step sizes).
             if advanced && let Some(best) = best {
                 island.restage(&best, &next_ga, &mut rng, &mut pop.ids, generation + 1);
+            }
+            // New picks flood their island with children.
+            let here: Vec<evo::Genome> = new_picks.iter().filter(|p| p.island == i).map(|p| p.genome.clone()).collect();
+            let children = island.flood(&here, cfg.review.flood_fraction, &ga, &mut rng, &mut pop.ids, generation + 1);
+            for pick in &here {
+                println!(
+                    "== pick #{} (island {i}): protected to gen {}, {children} children shared by {} pick(s)",
+                    pick.id,
+                    generation + cfg.review.protect_gens,
+                    here.len()
+                );
             }
         }
         if advanced {

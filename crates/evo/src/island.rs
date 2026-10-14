@@ -43,7 +43,9 @@ impl Island {
     }
 
     /// Replace the population with the next generation. Needs `fitness`.
-    pub fn breed(&mut self, cfg: &GaConfig, rng: &mut Rng, ids: &mut Ids, generation: u32) {
+    /// `keep` (human picks under protection) is carried over unchanged
+    /// after the elites, whether or not it's still in the island.
+    pub fn breed(&mut self, cfg: &GaConfig, rng: &mut Rng, ids: &mut Ids, generation: u32, keep: &[Genome]) {
         assert_eq!(self.fitness.len(), self.genomes.len(), "evaluate before breeding");
         let n = self.genomes.len();
         let order = if cfg.selection == Selection::Pareto && self.objectives.len() == n {
@@ -57,6 +59,11 @@ impl Island {
         let neurons = self.spec.neuron_ranges();
 
         let mut next: Vec<Genome> = order[..elites].iter().map(|&i| self.genomes[i].clone()).collect();
+        for g in keep {
+            if !next.iter().any(|e| e.id == g.id) {
+                next.push(g.clone());
+            }
+        }
         while next.len() < n - immigrants {
             let a = &self.genomes[tournament(&position, cfg.tournament_size, rng)];
             let (mut params, mut sigma, parents) = if rng.chance(cfg.crossover_rate) {
@@ -92,6 +99,27 @@ impl Island {
             *g = Genome { id: ids.fresh(), params, sigma: cfg.sigma_start, parents: [None, None], born: generation };
         }
     }
+
+    /// After breeding: up to `fraction` of the island becomes mutated
+    /// children of `picks` (human picks; taken in turn when there are
+    /// several), each with its parent's sigma and lineage. Only genomes born
+    /// this generation are replaced, from the tail, so elites and kept
+    /// genomes stay. Returns how many children it made.
+    pub fn flood(&mut self, picks: &[Genome], fraction: f64, cfg: &GaConfig, rng: &mut Rng, ids: &mut Ids, generation: u32) -> usize {
+        if picks.is_empty() {
+            return 0;
+        }
+        let count = (self.genomes.len() as f64 * fraction).round() as usize;
+        let mut made = 0;
+        for g in self.genomes.iter_mut().rev().filter(|g| g.born == generation).take(count) {
+            let pick = &picks[made % picks.len()];
+            let (mut params, mut sigma) = (pick.params.clone(), pick.sigma);
+            mutate(&mut params, &mut sigma, cfg, rng);
+            *g = Genome { id: ids.fresh(), params, sigma, parents: [Some(pick.id), None], born: generation };
+            made += 1;
+        }
+        made
+    }
 }
 
 fn random_genome(spec: &NetworkSpec, cfg: &GaConfig, rng: &mut Rng, ids: &mut Ids, generation: u32) -> Genome {
@@ -100,14 +128,18 @@ fn random_genome(spec: &NetworkSpec, cfg: &GaConfig, rng: &mut Rng, ids: &mut Id
 
 /// Islands compete: if the weakest island's best is well behind the
 /// strongest's, it's replaced by a copy of the strongest (network shape
-/// included). Call after evaluation, before breeding. Returns (from, to).
-pub fn migrate(islands: &mut [Island], cfg: &GaConfig, ids: &mut Ids) -> Option<(usize, usize)> {
+/// included). Call after evaluation, before breeding. An island holding a
+/// `protected` genome (a human pick) is never overwritten: the weakest one
+/// without any is. Returns (from, to).
+pub fn migrate(islands: &mut [Island], cfg: &GaConfig, ids: &mut Ids, protected: &[u64]) -> Option<(usize, usize)> {
     if islands.len() < 2 {
         return None;
     }
     let bests: Vec<f64> = islands.iter().map(|i| i.best().map_or(f64::MIN, |(_, f)| f)).collect();
     let order = ranked(&bests);
-    let (strong, weak) = (order[0], order[order.len() - 1]);
+    let strong = order[0];
+    let holds_pick = |i: usize| islands[i].genomes.iter().any(|g| protected.contains(&g.id));
+    let weak = *order[1..].iter().rev().find(|&&i| !holds_pick(i))?;
     let (best, worst) = (bests[strong], bests[weak]);
     // "Well behind": below `gap` of the best, measured so it also works when
     // fitness is negative.
@@ -165,7 +197,7 @@ mod tests {
         let mut island = Island::new(0, spec(3), &cfg(), &mut rng, &mut ids);
         island.fitness = (0..20).map(f64::from).collect();
         let champion = island.genomes[19].clone();
-        island.breed(&cfg(), &mut rng, &mut ids, 1);
+        island.breed(&cfg(), &mut rng, &mut ids, 1, &[]);
         assert_eq!(island.genomes.len(), 20);
         assert_eq!(island.genomes[0], champion, "the best genome survives unchanged");
         let fresh = island.genomes.iter().filter(|g| g.parents == [None, None] && g.born == 1).count();
@@ -184,7 +216,7 @@ mod tests {
             if generation == 0 {
                 first = island.best().unwrap().1;
             }
-            island.breed(&cfg(), &mut rng, &mut ids, generation + 1);
+            island.breed(&cfg(), &mut rng, &mut ids, generation + 1, &[]);
         }
         island.fitness = island.genomes.iter().map(score).collect();
         let last = island.best().unwrap().1;
@@ -203,7 +235,7 @@ mod tests {
             _ => [10.0, 0.1, 0.0],
         }).collect();
         let (driver, drifter) = (island.genomes[0].clone(), island.genomes[1].clone());
-        island.breed(&GaConfig { elite_fraction: 0.1, ..cfg() }, &mut rng, &mut ids, 1);
+        island.breed(&GaConfig { elite_fraction: 0.1, ..cfg() }, &mut rng, &mut ids, 1, &[]);
         assert!(island.genomes.contains(&driver) && island.genomes.contains(&drifter), "both ends of the front are elites");
     }
 
@@ -232,12 +264,69 @@ mod tests {
         ];
         islands[0].fitness = vec![100.0; 20];
         islands[1].fitness = vec![10.0; 20];
-        assert_eq!(migrate(&mut islands, &cfg(), &mut ids), Some((0, 1)));
+        assert_eq!(migrate(&mut islands, &cfg(), &mut ids, &[]), Some((0, 1)));
         assert_eq!(islands[1].spec, spec(3));
         assert_eq!(islands[1].index, 1);
 
         // Close enough: no migration.
         islands[1].fitness = vec![95.0; 20];
-        assert_eq!(migrate(&mut islands, &cfg(), &mut ids), None);
+        assert_eq!(migrate(&mut islands, &cfg(), &mut ids, &[]), None);
+    }
+
+    #[test]
+    fn kept_genomes_survive_breeding_even_when_gone() {
+        let (mut rng, mut ids) = (Rng::new(7), Ids::default());
+        let mut island = Island::new(0, spec(3), &cfg(), &mut rng, &mut ids);
+        island.fitness = (0..20).map(f64::from).collect();
+        // The worst genome, and one from outside the island (bred out
+        // before the pick reached the trainer).
+        let worst = island.genomes[0].clone();
+        let outsider = Genome { id: 999, ..island.genomes[1].clone() };
+        island.breed(&cfg(), &mut rng, &mut ids, 1, &[worst.clone(), outsider.clone()]);
+        assert_eq!(island.genomes.len(), 20);
+        assert!(island.genomes.contains(&worst) && island.genomes.contains(&outsider));
+        // A kept genome that's also an elite isn't doubled.
+        island.fitness = (0..20).map(f64::from).collect();
+        let champion = island.genomes[19].clone();
+        island.breed(&cfg(), &mut rng, &mut ids, 2, std::slice::from_ref(&champion));
+        assert_eq!(island.genomes.iter().filter(|g| g.id == champion.id).count(), 1);
+    }
+
+    #[test]
+    fn flood_fills_the_tail_with_children_of_the_pick() {
+        let (mut rng, mut ids) = (Rng::new(8), Ids::default());
+        let mut island = Island::new(0, spec(3), &cfg(), &mut rng, &mut ids);
+        island.fitness = (0..20).map(f64::from).collect();
+        let pick = island.genomes[3].clone();
+        island.breed(&cfg(), &mut rng, &mut ids, 1, std::slice::from_ref(&pick));
+        let front: Vec<Genome> = island.genomes.iter().filter(|g| g.born != 1).cloned().collect();
+        assert_eq!(island.flood(std::slice::from_ref(&pick), 0.3, &cfg(), &mut rng, &mut ids, 1), 6, "30% of 20");
+        let children = island.genomes.iter().filter(|g| g.parents == [Some(pick.id), None]).count();
+        assert!(children >= 6, "{children}");
+        assert!(island.genomes[14..].iter().all(|g| g.parents == [Some(pick.id), None]), "the tail");
+        assert!(front.iter().all(|g| island.genomes.contains(g)), "elites and the pick stay");
+
+        // Two picks share the flood.
+        let other = island.genomes[0].clone();
+        island.fitness = (0..20).map(f64::from).collect();
+        island.breed(&cfg(), &mut rng, &mut ids, 2, &[pick.clone(), other.clone()]);
+        assert_eq!(island.flood(&[pick.clone(), other.clone()], 0.3, &cfg(), &mut rng, &mut ids, 2), 6);
+        let of = |id| island.genomes[14..].iter().filter(|g| g.parents == [Some(id), None]).count();
+        assert_eq!((of(pick.id), of(other.id)), (3, 3));
+    }
+
+    #[test]
+    fn migration_spares_an_island_holding_a_pick() {
+        let (mut rng, mut ids) = (Rng::new(9), Ids::default());
+        let mut islands: Vec<Island> = (0..3).map(|i| Island::new(i, spec(3 + i), &cfg(), &mut rng, &mut ids)).collect();
+        islands[0].fitness = vec![100.0; 20];
+        islands[1].fitness = vec![20.0; 20];
+        islands[2].fitness = vec![10.0; 20];
+        let pick = islands[2].genomes[5].id;
+        assert_eq!(migrate(&mut islands, &cfg(), &mut ids, &[pick]), Some((0, 1)), "next-weakest instead");
+        assert!(islands[2].genomes.iter().any(|g| g.id == pick));
+        // Every other island holds a pick: no migration.
+        let pick1 = islands[1].genomes[0].id;
+        assert_eq!(migrate(&mut islands, &cfg(), &mut ids, &[pick, pick1]), None);
     }
 }

@@ -2,6 +2,7 @@
 
 pub mod driver;
 pub mod genome_file;
+pub mod picks;
 pub mod replay_file;
 pub mod top_file;
 

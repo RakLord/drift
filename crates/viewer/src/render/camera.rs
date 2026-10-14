@@ -12,6 +12,8 @@ pub struct FollowCamera {
     /// Width of the screen area the world is drawn in, from the left edge
     /// (the network view can take the rest).
     view_w: f32,
+    /// Instead, draw in this screen rectangle (a review grid tile).
+    tile: Option<Rect>,
 }
 
 const BASE_PIXELS_PER_METRE: f64 = 22.0;
@@ -19,7 +21,7 @@ const LOOK_AHEAD_SECS: f64 = 0.3;
 
 impl FollowCamera {
     pub fn new(center: Vec2) -> Self {
-        Self { center, pixels_per_metre: BASE_PIXELS_PER_METRE, user_zoom: 1.0, view_w: screen_width() }
+        Self { center, pixels_per_metre: BASE_PIXELS_PER_METRE, user_zoom: 1.0, view_w: screen_width(), tile: None }
     }
 
     pub fn update(&mut self, target: Vec2, velocity: Vec2, dt: f64) {
@@ -35,12 +37,23 @@ impl FollowCamera {
         self.view_w = width.clamp(1.0, screen_width());
     }
 
+    /// Draw the world in this screen rectangle instead.
+    pub fn set_tile(&mut self, rect: Rect) {
+        self.tile = Some(rect);
+    }
+
+    /// The screen rectangle the world is drawn in.
+    fn area(&self) -> Rect {
+        self.tile.unwrap_or_else(|| Rect::new(0.0, 0.0, self.view_w, screen_height()))
+    }
+
     /// Frame a whole area (map view), immediately.
     pub fn show_area(&mut self, min: Vec2, max: Vec2) {
         self.center = (min + max) / 2.0;
         let size = max - min;
-        let fit_x = f64::from(self.view_w) / size.x.max(1.0);
-        let fit_y = f64::from(screen_height()) / size.y.max(1.0);
+        let area = self.area();
+        let fit_x = f64::from(area.w) / size.x.max(1.0);
+        let fit_y = f64::from(area.h) / size.y.max(1.0);
         self.pixels_per_metre = fit_x.min(fit_y);
     }
 
@@ -54,25 +67,29 @@ impl FollowCamera {
 
     pub fn apply(&self) {
         let ppm = self.pixels_per_metre as f32;
+        let a = self.area();
         set_camera(&Camera2D {
             target: to_mq(self.center),
             // Negative y zoom makes world +y point up the screen.
-            zoom: vec2(2.0 * ppm / self.view_w, -2.0 * ppm / screen_height()),
-            viewport: Some((0, 0, self.view_w as i32, screen_height() as i32)),
+            zoom: vec2(2.0 * ppm / a.w, -2.0 * ppm / a.h),
+            // GL viewports count from the bottom of the window.
+            viewport: Some((a.x as i32, (screen_height() - a.y - a.h) as i32, a.w as i32, a.h as i32)),
             ..Default::default()
         });
     }
 
     /// The world point under screen pixel (x, y).
     pub fn screen_to_world(&self, x: f32, y: f32) -> Vec2 {
-        let dx = f64::from(x - self.view_w / 2.0);
-        let dy = f64::from(screen_height() / 2.0 - y);
+        let a = self.area();
+        let dx = f64::from(x - a.x - a.w / 2.0);
+        let dy = f64::from(a.y + a.h / 2.0 - y);
         self.center + Vec2::new(dx, dy) / self.pixels_per_metre
     }
 
     /// World-space corners (min, max) of what is on screen.
     pub fn visible(&self) -> (Vec2, Vec2) {
-        let half = Vec2::new(f64::from(self.view_w), f64::from(screen_height())) / (2.0 * self.pixels_per_metre);
+        let a = self.area();
+        let half = Vec2::new(f64::from(a.w), f64::from(a.h)) / (2.0 * self.pixels_per_metre);
         (self.center - half, self.center + half)
     }
 }

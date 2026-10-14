@@ -8,8 +8,9 @@
 //! every run has ended, a new heat starts, with newer genomes if training
 //! has written them.
 
+pub(super) mod driver_info;
 mod leaderboard;
-mod racer;
+pub(super) mod racer;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,6 +30,7 @@ use crate::paths::workspace_file;
 use crate::render::effects::damage::Damage;
 use crate::render::score::ScoreHud;
 use crate::render::{self, camera::FollowCamera, effects::Effects, ground, hud, text, theme, track::TrackMesh};
+use driver_info::DriverInfo;
 use leaderboard::Leaderboard;
 use racer::Racer;
 
@@ -45,7 +47,7 @@ const SPLIT_TRACK_SHARE: f32 = 0.45;
 const STRIP_H: f32 = 52.0;
 /// Clicking within this many metres of a car follows it.
 const CLICK_RADIUS: f64 = 5.0;
-const DEFAULT_TRACK: &str = "config/default_track.toml";
+pub(super) const DEFAULT_TRACK: &str = "config/default_track.toml";
 
 /// One colour per island: the validated categorical palette, in order.
 const ISLAND_COLOURS: [Color; 6] = [
@@ -57,17 +59,17 @@ const ISLAND_COLOURS: [Color; 6] = [
     Color::new(0x00 as f32 / 255.0, 0x83 as f32 / 255.0, 0x00 as f32 / 255.0, 1.0),
 ];
 
-fn island_colour(island: u32) -> Color {
+pub(super) fn island_colour(island: u32) -> Color {
     ISLAND_COLOURS[island as usize % ISLAND_COLOURS.len()]
 }
 
 /// A slightly darker shade for the roof.
-fn roof_of(c: Color) -> Color {
+pub(super) fn roof_of(c: Color) -> Color {
     Color::new(c.r * 0.8, c.g * 0.8, c.b * 0.8, c.a)
 }
 
 #[derive(Clone, PartialEq)]
-enum TrackChoice {
+pub(super) enum TrackChoice {
     Library(PathBuf),
     Generated(u64),
 }
@@ -95,6 +97,7 @@ pub struct WatchScreen {
     network_view: NetworkView,
     net_view: NetView,
     leaderboard: Leaderboard,
+    driver_info: DriverInfo,
     dashboard: Dashboard,
     camera: FollowCamera,
     accumulator: f64,
@@ -151,6 +154,7 @@ impl WatchScreen {
             network_view: NetworkView::new(),
             net_view: NetView::Off,
             leaderboard: Leaderboard::new(),
+            driver_info: DriverInfo::new(),
             accumulator: 0.0,
             time_scale_index: NORMAL_SPEED,
             paused: false,
@@ -259,16 +263,6 @@ impl WatchScreen {
         }
     }
 
-    /// The library track after the current one (or the first).
-    fn next_library_track(&self) -> Option<PathBuf> {
-        let paths = library_paths();
-        let next = match &self.choice {
-            TrackChoice::Library(current) => paths.iter().position(|p| p == current).map_or(0, |i| i + 1),
-            TrackChoice::Generated(_) => 0,
-        };
-        paths.get(next % paths.len().max(1)).cloned()
-    }
-
     pub fn update(&mut self, dt: f64) {
         let dt = dt.min(0.1);
         self.handle_keys();
@@ -347,7 +341,18 @@ impl WatchScreen {
     }
 
     fn handle_keys(&mut self) {
-        if is_key_pressed(KeyCode::Tab) && !self.racers.is_empty() {
+        // The dashboard covers the screen and takes the input while open.
+        if self.dashboard.open {
+            if is_key_pressed(KeyCode::C) {
+                self.dashboard.open = false;
+            }
+            return;
+        }
+        if is_key_pressed(KeyCode::Tab) {
+            self.leaderboard.expanded = !self.leaderboard.expanded;
+            self.leaderboard.open = true;
+        }
+        if is_key_pressed(KeyCode::F) && !self.racers.is_empty() {
             self.follow((self.followed + 1) % self.racers.len());
         }
         if is_key_pressed(KeyCode::R) {
@@ -356,8 +361,11 @@ impl WatchScreen {
         if is_key_pressed(KeyCode::J) {
             self.switch = Some(super::Switch::Replays(self.run.clone()));
         }
+        if is_key_pressed(KeyCode::U) {
+            self.switch = Some(super::Switch::Review(self.run.clone()));
+        }
         if is_key_pressed(KeyCode::L)
-            && let Some(path) = self.next_library_track()
+            && let Some(path) = next_library_track(&self.choice)
         {
             self.set_track(TrackChoice::Library(path));
         }
@@ -377,8 +385,9 @@ impl WatchScreen {
             self.network_view.clear();
             self.seen_decisions = 0;
         }
-        let toggles: [(KeyCode, &mut bool); 8] = [
+        let toggles: [(KeyCode, &mut bool); 9] = [
             (KeyCode::O, &mut self.leaderboard.open),
+            (KeyCode::D, &mut self.driver_info.open),
             (KeyCode::C, &mut self.dashboard.open),
             (KeyCode::I, &mut self.show_inputs),
             (KeyCode::E, &mut self.show_effects),
@@ -401,7 +410,7 @@ impl WatchScreen {
 
         let (mx, my) = mouse_position();
         let over_net = self.net_view == NetView::Full || (self.net_view == NetView::Split && mx >= self.track_width());
-        let over_ui = self.leaderboard.hovered() || over_net;
+        let over_ui = self.leaderboard.hovered() || self.driver_info.hovered() || over_net;
         let (_, wheel) = mouse_wheel();
         if wheel != 0.0 && !over_ui {
             self.camera.zoom_by(if wheel > 0.0 { 1.1 } else { 1.0 / 1.1 });
@@ -431,6 +440,10 @@ impl WatchScreen {
     }
 
     pub fn draw(&mut self) {
+        if self.dashboard.open {
+            self.dashboard.draw();
+            return;
+        }
         let view_w = self.track_width();
         if self.net_view != NetView::Full {
             self.draw_track_view(view_w);
@@ -445,10 +458,15 @@ impl WatchScreen {
             self.network_view.draw(r.network(), rect, true);
         }
         self.draw_status(view_w);
-        if self.net_view != NetView::Full
-            && let Some(i) = self.leaderboard.show(&self.racers, self.followed, |r| island_colour(r.entry.island))
-        {
-            self.follow(i);
+        if self.net_view != NetView::Full {
+            let generation = self.top.as_ref().map_or(0, |t| t.header.generation);
+            let colour = |r: &Racer| island_colour(r.entry.island);
+            // Info last: on top where a wide leaderboard reaches it.
+            let row = self.leaderboard.show(&self.racers, self.followed, generation, view_w, colour);
+            let info = self.driver_info.show(&self.racers, self.followed, generation, view_w, colour);
+            if let Some(i) = info.or(row) {
+                self.follow(i);
+            }
         }
         self.dashboard.draw();
     }
@@ -550,7 +568,7 @@ impl WatchScreen {
             text(message, ((w - width) / 2.0).max(16.0), 170.0, 22.0, theme::NEON_CYAN);
         }
         let help = if self.show_help {
-            "Tab / click car or row: follow  J replays  R restart heat  L library track  N generated track  O leaderboard  M map  V network  I inputs  E effects  T telemetry  C run charts  [ ] speed  P pause  H help"
+            "F / click car or row: follow  Tab leaderboard details  D driver info  J replays  U review grid  R restart heat  L library track  N generated track  O leaderboard  M map  V network  I inputs  E effects  T telemetry  C run charts  [ ] speed  P pause  H help"
         } else {
             "H: help"
         };
@@ -560,7 +578,7 @@ impl WatchScreen {
     }
 }
 
-fn build(choice: &TrackChoice, generator: &GeneratorParams) -> Result<Arc<Track>, String> {
+pub(super) fn build(choice: &TrackChoice, generator: &GeneratorParams) -> Result<Arc<Track>, String> {
     let def = match choice {
         TrackChoice::Library(path) => TrackDef::load(path).map_err(|e| format!("{}: {e}", path.display()))?,
         TrackChoice::Generated(seed) => {
@@ -569,6 +587,16 @@ fn build(choice: &TrackChoice, generator: &GeneratorParams) -> Result<Arc<Track>
     };
     let name = def.name.clone();
     Track::build(def).map(Arc::new).map_err(|e| format!("{name}: {e}"))
+}
+
+/// The library track after the current one (or the first).
+pub(super) fn next_library_track(choice: &TrackChoice) -> Option<PathBuf> {
+    let paths = library_paths();
+    let next = match choice {
+        TrackChoice::Library(current) => paths.iter().position(|p| p == current).map_or(0, |i| i + 1),
+        TrackChoice::Generated(_) => 0,
+    };
+    paths.get(next % paths.len().max(1)).cloned()
 }
 
 /// Every library track file, sorted.
@@ -581,7 +609,7 @@ fn library_paths() -> Vec<PathBuf> {
 }
 
 /// The first `tracks.fixed` entry of a run's training config, if any.
-fn first_fixed_track(training: &Path) -> Option<PathBuf> {
+pub(super) fn first_fixed_track(training: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(training).ok()?;
     let value: toml::Value = toml::from_str(&text).ok()?;
     let first = value.get("tracks")?.get("fixed")?.as_array()?.first()?.as_str()?;

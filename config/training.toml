@@ -58,6 +58,11 @@ clutch_grace_secs = 0.4   # a clutch press shorter than this is a kick; longer i
 # `window_secs` of its last change of direction. Single swings (a lift, a
 # counter-steer catch, a transition) don't count. Charged by `smoothness`.
 smoothness = { throttle = { reversal = 0.2, window_secs = 0.3 }, steer = { reversal = 0.3, window_secs = 0.3 } }
+# What the network's steer output means. "rate": how fast to turn the wheel,
+# where full output goes lock to lock in `full_lock_secs` (the rack itself
+# takes 0.33 s), so the wheel can't jitter. "position" (or leaving it out,
+# as runs before run9 do): where the wheel should be, fresh every decision.
+steering = { mode = "rate", full_lock_secs = 0.5 }
 
 [tracks]
 per_generation = 3        # fresh generated tracks every generation (config/generator.toml)
@@ -90,6 +95,16 @@ every = 10
 [watch]
 per_island = 5
 drifters = 10
+
+# Human picks from the review grid (`cargo run -p viewer -- --review <run>`).
+# The trainer reads them at the end of each generation (runs/<run>/picks/).
+# A pick is kept unchanged in its island for `protect_gens` generations
+# (never bred out, and migration skips its island), and `flood_fraction` of
+# the island is replaced by mutated children of it straight away (shared
+# when one island gets several picks at once).
+[review]
+protect_gens = 50
+flood_fraction = 0.3
 
 # Curriculum. Per run:
 #   driving = progress * metres (capped at progress_cap_laps) + time_alive * seconds
