@@ -273,6 +273,7 @@ Outputs are produced once per decision and held until the next one.
   - Driving reward: progress (capped after stage 1) plus time alive.
   - Drift quality is *flow* (below).
   - Stages: drive → slide → judged. The banked judged score (Line/Angle/Style) counts in the judged stage.
+  - Advancing (`advance` per stage): the saved driver's metric, averaged over the stage's last `generations` gens (20 by default), must reach `at_least`. The window starts empty on `--resume`. Why: until run9 gen ~1890 it needed `generations` passes in a row, but the value swings ±0.06 per gen with the tracks drawn, so run9 sat at a ~0.36 mean around gen 1700–1830 (passing ~55% of gens) and never got past a 7-gen streak.
   - Shaping stages soften the scoring: drift from 5°, flat speed multiplier, spins don't end the run, no bobble penalty.
 - **Flow (drift quality, `[flow]` in scoring.toml):** rewards long sweeping drifts without penalising anything.
   - Each second drifting earns the angle points' shape (full at 40–65°, tapering towards a spin) × a hold credit.
@@ -389,7 +390,7 @@ Outputs are produced once per decision and held until the next one.
   - **Scoring:** line / angle / style / penalty for the saved driver and the population, judged objective, top drifter's score, drift angle, seconds per side
   - **Driving:** progress, laps (+ test tracks), biggest angle per run, sawing per second, spins, zones
   - **Health:** best per island, fitness spread, weight diversity, sigma, seconds per generation, sim speed
-- **Headline numbers** under the title (`kpi.rs`): best this stage (fitness is shaped per stage, so only this stage counts), the best's trend over 100 gens, generation time, the saved driver's fitness and rank, and time since the last generation (amber when the trainer looks stalled). Beside them, the saved driver against the stage's gate.
+- **Headline numbers** under the title (`kpi.rs`): best this stage (fitness is shaped per stage, so only this stage counts), the best's trend over 100 gens, generation time, the saved driver's fitness and rank, and time since the last generation (amber when the trainer looks stalled). Beside them, the saved driver against the stage's gate: its rolling mean as the trainer judges it, how full the window is, and the latest value.
 - **Reading charts:** legends show the latest generation, or the hovered one, or the one pinned by a click. The tooltip adds each series' trend and its change. Dashed lines mark stage changes.
 - **Trend lines** (`trend.rs`): a trailing rolling mean, about 1/20 of the visible generations wide, never looking ahead (so the live right edge means the same as the rest). `S` cycles trend + raw / trend / raw.
 - **`Z`** narrows to the last 500, then 100 generations.

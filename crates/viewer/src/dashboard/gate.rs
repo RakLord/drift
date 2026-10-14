@@ -53,35 +53,26 @@ impl Gate {
         }
     }
 
-    /// Generations in a row this stage at or above the gate, ending now.
-    /// The trainer restarts its count on --resume, so after a resume this
-    /// can run ahead of it.
-    fn streak(&self, m: &Metrics, values: &[f64]) -> u32 {
-        (0..m.len())
-            .rev()
-            .take_while(|&i| m.text("stage", i) == self.stage && values[i] >= self.at_least)
-            .count() as u32
-    }
-
-    /// One row: label, a bar filled to the latest value with a tick at the
-    /// gate, and the streak. Returns its width.
+    /// One row: label, a bar filled to the rolling mean with a tick at the
+    /// gate, how full the window is, and the latest value. Returns its width.
     pub fn draw(&self, m: &Metrics, x: f32, y: f32) -> f32 {
         let values = self.values(m);
         let latest = values.last().copied().unwrap_or(f64::NAN);
-        let streak = self.streak(m, &values);
-        let passing = latest >= self.at_least;
+        let window = self.generations.max(1) as usize;
+        let (average, count) = rolling(&values, |i| m.text("stage", i) == self.stage, window);
+        let passing = count == window && average >= self.at_least;
         let unit = if self.metric == "progress" { " m" } else { "" };
 
         let mut cx = x;
-        cx += text(&format!("gate  {}  ", self.metric), cx, y, 18.0, theme::TEXT_DIM);
-        cx += text(&format!("{} / {}{unit}", number(latest), number(self.at_least)), cx, y, 18.0, theme::TEXT);
+        cx += text(&format!("gate  {}  avg ", self.metric), cx, y, 18.0, theme::TEXT_DIM);
+        cx += text(&format!("{} / {}{unit}", number(average), number(self.at_least)), cx, y, 18.0, theme::TEXT);
         cx += 12.0;
 
         // Bar spans 0..1.25 x the gate, so the tick sits at 80%.
         let (bar_w, bar_h) = (180.0, 10.0);
         let top = y - bar_h;
         let span = self.at_least * 1.25;
-        let fill = if span > 0.0 && latest.is_finite() { (latest / span).clamp(0.0, 1.0) as f32 } else { 0.0 };
+        let fill = if span > 0.0 && average.is_finite() { (average / span).clamp(0.0, 1.0) as f32 } else { 0.0 };
         draw_rectangle(cx, top, bar_w, bar_h, theme::PANEL_SOLID);
         draw_rectangle(cx, top, bar_w * fill, bar_h, if passing { theme::GRIP } else { theme::SODIUM });
         draw_rectangle_lines(cx, top, bar_w, bar_h, 1.0, theme::GRID_MAJOR);
@@ -89,10 +80,17 @@ impl Gate {
         draw_line(tick, top - 3.0, tick, top + bar_h + 3.0, 2.0, theme::TEXT);
         cx += bar_w + 12.0;
 
-        let colour = if streak > 0 { theme::GRIP } else { theme::TEXT_DIM };
-        cx += text(&format!("streak {streak}/{}", self.generations), cx, y, 18.0, colour);
+        cx += text(&format!("over {count}/{window} gens  latest {}", number(latest)), cx, y, 18.0, theme::TEXT_DIM);
         cx - x
     }
+}
+
+/// Mean of the newest `window` values whose rows are `in_stage` (stopping at
+/// the first row that isn't), and how many it averaged. The trainer's window
+/// starts empty on --resume, so after a resume this can run ahead of it.
+fn rolling(values: &[f64], in_stage: impl Fn(usize) -> bool, window: usize) -> (f64, usize) {
+    let recent: Vec<f64> = (0..values.len()).rev().take_while(|&i| in_stage(i)).take(window).map(|i| values[i]).collect();
+    if recent.is_empty() { (f64::NAN, 0) } else { (recent.iter().sum::<f64>() / recent.len() as f64, recent.len()) }
 }
 
 pub(super) fn number(v: f64) -> String {
@@ -123,5 +121,14 @@ mod tests {
         assert!(Gate::load(&path, "slide").is_none());
         assert!(Gate::load(&path, "missing").is_none());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn rolling_mean_covers_only_the_current_stage() {
+        let values = [9.0, 1.0, 2.0, 3.0];
+        // Row 0 is an earlier stage.
+        assert_eq!(rolling(&values, |i| i > 0, 2), (2.5, 2));
+        assert_eq!(rolling(&values, |i| i > 0, 10), (2.0, 3));
+        assert!(rolling(&values, |_| false, 3).0.is_nan());
     }
 }

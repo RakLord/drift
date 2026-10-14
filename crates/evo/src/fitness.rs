@@ -11,6 +11,8 @@
 //! Shaping stages also soften the scoring rules (drift counts from a few
 //! degrees, spins don't end the run); the final stage is judged for real.
 
+use std::collections::VecDeque;
+
 use serde::{Deserialize, Serialize};
 use sim::episode::{EpisodeConfig, EpisodeResult};
 use sim::scoring::ScoringParams;
@@ -172,9 +174,12 @@ pub fn drift_quality(r: &EpisodeResult) -> f64 {
 #[serde(deny_unknown_fields)]
 pub struct Advance {
     pub metric: Metric,
-    /// The generation's best genome must average at least this...
+    /// The saved best genome's metric, averaged over its runs and then over
+    /// the last `generations` generations of the stage, must reach this.
+    /// A rolling mean rather than a streak: the per-generation value swings
+    /// with the tracks drawn, so N passes in a row almost never happen.
     pub at_least: f64,
-    /// ...for this many generations in a row.
+    /// The window, in generations. Nothing advances until it is full.
     pub generations: u32,
 }
 
@@ -295,14 +300,16 @@ impl Stage {
 pub struct Curriculum {
     pub stages: Vec<Stage>,
     pub current: usize,
-    streak: u32,
+    /// The advance metric for this stage's recent generations, newest last.
+    /// Starts empty on --resume.
+    recent: VecDeque<f64>,
 }
 
 impl Curriculum {
     pub fn new(stages: Vec<Stage>, start: usize) -> Self {
         assert!(!stages.is_empty(), "the curriculum needs at least one stage");
         let current = start.min(stages.len() - 1);
-        Self { stages, current, streak: 0 }
+        Self { stages, current, recent: VecDeque::new() }
     }
 
     pub fn stage(&self) -> &Stage {
@@ -316,14 +323,15 @@ impl Curriculum {
         if self.current + 1 >= self.stages.len() {
             return false;
         }
-        if advance.metric.measure(best) >= advance.at_least {
-            self.streak += 1;
-        } else {
-            self.streak = 0;
+        let window = advance.generations.max(1) as usize;
+        self.recent.push_back(advance.metric.measure(best));
+        while self.recent.len() > window {
+            self.recent.pop_front();
         }
-        if self.streak >= advance.generations {
+        let average = self.recent.iter().sum::<f64>() / self.recent.len() as f64;
+        if self.recent.len() == window && average >= advance.at_least {
             self.current += 1;
-            self.streak = 0;
+            self.recent.clear();
             return true;
         }
         false
@@ -531,14 +539,23 @@ mod tests {
     }
 
     #[test]
-    fn advances_after_a_streak() {
-        let advance = Advance { metric: Metric::Progress, at_least: 500.0, generations: 2 };
+    fn advances_on_a_rolling_mean() {
+        let advance = Advance { metric: Metric::Progress, at_least: 500.0, generations: 3 };
         let mut c = Curriculum::new(vec![stage(1.0, 0.0, Some(advance)), stage(0.5, 1.0, None)], 0);
-        assert!(!c.observe(&[result(600.0, 0.0, 0.0)]));
-        assert!(!c.observe(&[result(400.0, 0.0, 0.0)]), "streak broken");
-        assert!(!c.observe(&[result(600.0, 0.0, 0.0)]));
-        assert!(c.observe(&[result(700.0, 0.0, 0.0)]));
+        assert!(!c.observe(&[result(900.0, 0.0, 0.0)]), "window not full yet");
+        assert!(!c.observe(&[result(900.0, 0.0, 0.0)]), "window not full yet");
+        // Mean of 900, 900, 100 is 633: one bad generation doesn't block it.
+        assert!(c.observe(&[result(100.0, 0.0, 0.0)]));
         assert_eq!(c.current, 1);
         assert!(!c.observe(&[result(9999.0, 0.0, 0.0)]), "last stage stays");
+    }
+
+    #[test]
+    fn a_low_mean_holds_and_old_generations_drop_out() {
+        let advance = Advance { metric: Metric::Progress, at_least: 500.0, generations: 2 };
+        let mut c = Curriculum::new(vec![stage(1.0, 0.0, Some(advance)), stage(0.5, 1.0, None)], 0);
+        assert!(!c.observe(&[result(100.0, 0.0, 0.0)]));
+        assert!(!c.observe(&[result(600.0, 0.0, 0.0)]), "mean 350");
+        assert!(c.observe(&[result(600.0, 0.0, 0.0)]), "the 100 has dropped out");
     }
 }

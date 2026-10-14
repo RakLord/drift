@@ -134,9 +134,11 @@ flood_fraction = 0.3
 # `shaping` softens the rules while learning: drift counts from a few degrees,
 # flat speed multiplier, spins don't end the run, no bobble penalty. The final
 # stage has no shaping, so it's judged on the real config/scoring.toml.
-# Moves on when the saved best genome averages `at_least` of `metric`
-# for `generations` in a row. Keep penalty weights small: big penalties teach
-# the cars that stopping is safest.
+# Moves on when the saved best genome's `metric`, averaged over the last
+# `generations` generations of the stage, reaches `at_least` (a rolling mean:
+# the value swings too much per generation for a streak to ever finish; the
+# window starts empty on --resume). Keep penalty weights small: big penalties
+# teach the cars that stopping is safest.
 # `polish` (optional) fine-tunes a stage: smaller mutation steps, no random
 # immigrants, more generated tracks per generation. Entering it (by advance
 # or --stage) resets sigma to its sigma_start without reseeding. E.g.
@@ -153,7 +155,7 @@ style = 0.0
 penalty = 0.0
 clutch = { strength = 2.0, calm_weight = 0.25 }
 shaping = { drift_start_angle_deg = 5.0, speed_multiplier = 1.0, end_on_spin = false, bobble_penalty = 0.0 }
-advance = { metric = "progress", at_least = 750.0, generations = 10 }
+advance = { metric = "progress", at_least = 750.0, generations = 20 }
 
 [[curriculum]]
 name = "slide"
@@ -168,7 +170,7 @@ penalty = 0.0
 clutch = { strength = 2.0, calm_weight = 0.25 }
 smoothness = { throttle = 0.08, steer = 0.01 }  # half the judged weights: fresh networks saw a lot
 shaping = { drift_start_angle_deg = 5.0, speed_multiplier = 1.0, end_on_spin = false, bobble_penalty = 0.0 }
-advance = { metric = "drift_quality", at_least = 0.35, generations = 10 }  # flow
+advance = { metric = "drift_quality", at_least = 0.35, generations = 20 }  # flow
 
 [[curriculum]]
 name = "judged"
